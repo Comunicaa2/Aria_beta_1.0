@@ -11,7 +11,8 @@ Características clave:
     reiniciar, ofrece continuar la tarea pendiente.
 
 Uso:
-    python main.py
+    python main.py             consola manual normal
+    python main.py --trainer   además, consume tareas del Entrenador (tasks/active.json)
 
 Consola:
     <comando>   Aria intenta cumplir la tarea (hasta MAX_PASOS_TAREA ciclos)
@@ -21,6 +22,8 @@ Consola:
 
 import logging
 import sys
+import threading
+import time
 
 from config import (
     AGENT_NAME,
@@ -37,6 +40,15 @@ from agent.controller import Controller
 from agent.telemetry import Telemetria
 from avatar.vts import VTuberAvatar
 from utils import image
+
+# Modo Entrenador (opcional): import PROTEGIDO. Si trainer/ no existe o falla,
+# Aria sigue funcionando con normalidad en modo manual. No rompe nada.
+try:
+    from trainer import protocolo as _proto
+    _TRAINER_OK = True
+except Exception:                                  # noqa: BLE001
+    _proto = None
+    _TRAINER_OK = False
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
@@ -66,6 +78,12 @@ class Aria:
 
         self.stats = {"tareas": 0, "ciclos": 0, "acciones": 0,
                       "fallos": 0, "limite_api": 0}
+
+        # Serializa la ejecución física: una sola tarea controla el SO a la vez,
+        # venga del usuario (consola) o del Entrenador (consumidor). En modo
+        # normal el lock está siempre libre, así que no afecta nada.
+        self._exec_lock = threading.Lock()
+        self._limite_event = threading.Event()     # se activa si Aria toca 429
 
         logger.info(
             "%s v%s listo — Físico: %s | Visión: %s | Avatar: %s.",
@@ -201,9 +219,55 @@ class Aria:
             return snap
         return None
 
+    # ── Ejecución serializada (consola + entrenador no se pisan) ─────────────────
+    def ejecutar_protegido(self, objetivo: str, **kw) -> str:
+        """Ejecuta una tarea tomando el lock físico (una sola tarea controla el SO)."""
+        with self._exec_lock:
+            return self.ejecutar_tarea(objetivo, **kw)
+
+    # ── Modo Entrenador: consume tareas de tasks/active.json ─────────────────────
+    def consumir_entrenador(self, stop_event: threading.Event) -> None:
+        """
+        Bucle del consumidor (hilo aparte). Vigila tasks/active.json: cuando el
+        Entrenador deja una tarea en estado 'pendiente', la reclama, la ejecuta y
+        la marca 'ejecutada' para que el Entrenador la verifique. Convive con la
+        consola manual (ambos comparten el lock físico). Solo se usa con --trainer.
+        """
+        if not _TRAINER_OK:
+            return
+        logger.info("[ENTRENADOR] Consumidor activo — esperando tareas en tasks/active.json.")
+        while not stop_event.is_set():
+            try:
+                a = _proto.leer_activa()
+                if not a or a.get("estado") != _proto.PENDIENTE:
+                    stop_event.wait(0.5)
+                    continue
+
+                # Reclamar la tarea (pendiente → activa).
+                a["estado"] = _proto.ACTIVA
+                a["iniciado_en"] = time.time()
+                _proto.escribir_activa(a)
+                logger.info("[ENTRENADOR] Tarea recibida: «%s».", a.get("texto", ""))
+
+                resultado = self.ejecutar_protegido(a.get("texto", ""))
+
+                # Marcar ejecutada (el Entrenador la verificará con visión).
+                a["estado"] = _proto.EJECUTADA
+                a["resultado_aria"] = resultado
+                a["terminado_en"] = time.time()
+                _proto.escribir_activa(a)
+                logger.info("[ENTRENADOR] Tarea ejecutada (%s) — esperando verificación.", resultado)
+
+                if resultado == LIMITE:
+                    logger.warning("[ENTRENADOR] 429: Aria detiene el consumo de tareas.")
+                    self._limite_event.set()
+                    return
+            except Exception as exc:                # noqa: BLE001
+                logger.error("[ENTRENADOR] Error en el consumidor: %s", exc)
+                stop_event.wait(1.0)
+
     # ── Util ─────────────────────────────────────────────────────────────────────
     def _dormir(self, segundos: float) -> None:
-        import time
         time.sleep(max(0.0, segundos))
 
     def estado_resumen(self) -> str:
@@ -222,12 +286,14 @@ class Aria:
 # CONSOLA
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _banner(aria: Aria) -> None:
+def _banner(aria: Aria, trainer: bool) -> None:
+    modo = "  MODO ENTRENADOR activo (consumiendo tasks/active.json)\n" if trainer else ""
     print(
         f"\n{'═' * 64}\n"
         f"  {AGENT_NAME} {AGENT_VERSION} — Agente autónomo de PC (Gemini 2.5 Flash)\n"
         f"  Avatar: {'ACTIVO' if aria.avatar.activo else 'inactivo'} | "
         f"Físico: {'SIMULACIÓN' if aria.controller.simulacion else 'REAL'}\n"
+        f"{modo}"
         f"  Escribe una tarea. 'estado' para ver telemetría. 'salir' para cerrar.\n"
         f"{'═' * 64}\n"
     )
@@ -245,7 +311,7 @@ def _resolver_pendiente(aria: Aria) -> None:
     except (EOFError, KeyboardInterrupt):
         resp = "n"
     if resp in ("s", "si", "sí", "y", "yes"):
-        res = aria.ejecutar_tarea(snap.objetivo, ciclo_inicial=snap.ciclo, reanudada=True)
+        res = aria.ejecutar_protegido(snap.objetivo, ciclo_inicial=snap.ciclo, reanudada=True)
         _reportar(res)
         if res != LIMITE:
             estado_persistente.limpiar()
@@ -265,9 +331,26 @@ def _reportar(resultado: str) -> None:
 
 
 def main() -> None:
+    trainer = "--trainer" in sys.argv[1:]
+    if trainer and not _TRAINER_OK:
+        logger.warning("Se pidió --trainer pero el paquete trainer/ no está disponible; "
+                       "se sigue solo en modo manual.")
+        trainer = False
+
     aria = Aria()
-    _banner(aria)
+    _banner(aria, trainer)
     _resolver_pendiente(aria)
+
+    # Hilo consumidor del Entrenador (solo en modo --trainer).
+    stop_event = threading.Event()
+    hilo_consumidor = None
+    if trainer:
+        _proto.inicializar()
+        hilo_consumidor = threading.Thread(
+            target=aria.consumir_entrenador, args=(stop_event,),
+            name="AriaConsumidorEntrenador", daemon=True,
+        )
+        hilo_consumidor.start()
 
     try:
         while True:
@@ -275,6 +358,11 @@ def main() -> None:
                 entrada = input("Tarea > ").strip()
             except (EOFError, KeyboardInterrupt):
                 print()
+                break
+
+            # En modo entrenador, si Aria tocó 429 en una tarea consumida, salir.
+            if aria._limite_event.is_set():
+                print("\n  ⏸ Límite de API (429) alcanzado consumiendo tareas. Deteniendo.\n")
                 break
 
             if not entrada:
@@ -286,7 +374,7 @@ def main() -> None:
                 print(f"  → {aria.estado_resumen()}")
                 continue
 
-            resultado = aria.ejecutar_tarea(entrada)
+            resultado = aria.ejecutar_protegido(entrada)
             _reportar(resultado)
 
             if resultado == LIMITE:
@@ -295,6 +383,9 @@ def main() -> None:
             if resultado == COMPLETADO:
                 estado_persistente.limpiar()
     finally:
+        stop_event.set()
+        if hilo_consumidor is not None:
+            hilo_consumidor.join(timeout=2.0)
         aria.detener()
         print(f"\n{AGENT_NAME}: hasta la próxima. ✦\n")
 
