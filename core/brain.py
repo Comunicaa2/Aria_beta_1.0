@@ -31,6 +31,9 @@ from config import (
     GEN_TEMPERATURE,
     GEN_TOP_P,
     MAX_HISTORIAL,
+    NVIDIA_API_KEY,
+    NVIDIA_API_URL,
+    NVIDIA_MODEL,
     THINK_BUDGET_PROFUNDO,
     THINK_BUDGET_RAPIDO,
     THINK_RESPUESTA_EXTRA,
@@ -38,9 +41,27 @@ from config import (
     TIMEOUT_POOL,
     TIMEOUT_READ,
     TIMEOUT_WRITE,
+    TRAINING_MODE,
 )
 
 logger = logging.getLogger("aria.brain")
+
+# Tokens máximos para el fallback NIM (modelo de razonamiento: necesita margen
+# para su cadena de pensamiento antes de la respuesta en formato).
+_NIM_MAX_TOKENS = 1024
+# Limpia los bloques de razonamiento <think>…</think> que emiten los modelos de
+# razonamiento, dejando solo la respuesta en formato PENSAMIENTO/ACCION.
+_RE_THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
+_RE_THINK_ABIERTO = re.compile(r"<think>.*\Z", re.S | re.I)
+
+
+def _limpiar_think(texto: str) -> str:
+    """Quita bloques <think> (cerrados o sin cerrar) de la salida de un modelo razonador."""
+    if "<think>" not in texto.lower():
+        return texto
+    texto = _RE_THINK.sub("", texto)
+    texto = _RE_THINK_ABIERTO.sub("", texto)   # <think> sin cierre (cortado) → fuera
+    return texto.strip()
 
 
 class LimiteAPIError(Exception):
@@ -227,12 +248,36 @@ class Cerebro:
             salida.append(m if i == ultimo_user else self._sin_imagen(m))
         return salida
 
-    # ── Llamada HTTP a Gemini ──────────────────────────────────────────────────
+    # ── Orquestación de la llamada (Gemini + fallback opcional) ─────────────────
     def _llamar(self, profundo: bool) -> str:
         """
-        POST a generateContent. Devuelve el texto del modelo, "" si hubo error
-        recuperable, o lanza `LimiteAPIError` si la API responde 429.
+        Llama al modelo principal (Gemini). Devuelve el texto, "" si hubo error
+        recuperable, o lanza `LimiteAPIError` si se alcanzó el límite (429).
+
+        FALLBACK TEMPORAL DE ENTRENAMIENTO (fácil de retirar): si Gemini da 429 y
+        TRAINING_MODE está activo con NVIDIA_API_KEY, prueba NVIDIA NIM antes de
+        rendirse. En producción (TRAINING_MODE=false) el 429 se propaga tal cual,
+        y el orquestador guarda estado y se detiene.
+
+        Para quitar el fallback más adelante: borra el bloque `if TRAINING_MODE…`
+        y el método `_llamar_nim`. Nada más depende de ellos.
         """
+        try:
+            return self._llamar_gemini(profundo)
+        except LimiteAPIError:
+            if TRAINING_MODE and NVIDIA_API_KEY:
+                logger.warning("Gemini 429 → fallback a NVIDIA NIM (%s) [TRAINING_MODE].",
+                               NVIDIA_MODEL)
+                texto = self._llamar_nim(profundo)
+                if texto:
+                    return texto
+                logger.error("NIM también falló — sin fallback restante; se detiene.")
+            # Producción, fallback desactivado o NIM agotado → propagar (guardar y parar).
+            raise
+
+    # ── Llamada HTTP a Gemini (principal) ───────────────────────────────────────
+    def _llamar_gemini(self, profundo: bool) -> str:
+        """POST a generateContent. "" si error recuperable; lanza LimiteAPIError en 429."""
         budget = THINK_BUDGET_PROFUNDO if profundo else THINK_BUDGET_RAPIDO
         # Con pensamiento activo, la respuesta visible necesita tokens aparte.
         max_tokens = GEN_MAX_TOKENS + (THINK_RESPUESTA_EXTRA + budget if budget else 0)
@@ -275,6 +320,75 @@ class Cerebro:
             return ""
 
         return self._extraer_texto(resp.json())
+
+    # ── Fallback NVIDIA NIM (TEMPORAL, API estilo OpenAI) ───────────────────────
+    def _llamar_nim(self, profundo: bool) -> str:
+        """
+        Llama a NVIDIA NIM (formato chat/completions de OpenAI) con el MISMO system
+        prompt e historial (convertidos al formato OpenAI). Devuelve el texto en el
+        formato PENSAMIENTO/ACCION, o "" si falla (incluido 429 de NIM). Nunca lanza.
+        """
+        mensajes = self._a_openai(self._gc_imagenes())
+        payload = {
+            "model": NVIDIA_MODEL,
+            "messages": mensajes,
+            "temperature": GEN_TEMPERATURE,
+            "top_p": GEN_TOP_P,
+            "max_tokens": _NIM_MAX_TOKENS,
+            "stop": GEN_STOP,
+            "stream": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {NVIDIA_API_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        try:
+            resp = self._cliente.post(NVIDIA_API_URL, json=payload, headers=headers)
+        except httpx.HTTPError as exc:
+            logger.error("NIM: error de red — %s", exc)
+            return ""
+
+        if resp.status_code != 200:
+            logger.error("NIM: HTTP %d — %s", resp.status_code, resp.text[:200])
+            return ""
+
+        return self._extraer_openai(resp.json())
+
+    @staticmethod
+    def _a_openai(contents: list[dict]) -> list[dict]:
+        """Convierte el historial (formato Gemini) a `messages` de OpenAI/NIM."""
+        mensajes: list[dict] = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+        for m in contents:
+            rol = "assistant" if m.get("role") == "model" else "user"
+            piezas: list[dict] = []
+            for p in m.get("parts", []):
+                if "text" in p:
+                    piezas.append({"type": "text", "text": p["text"]})
+                elif "inlineData" in p:
+                    d = p["inlineData"]
+                    url = f"data:{d.get('mimeType', 'image/jpeg')};base64,{d.get('data', '')}"
+                    piezas.append({"type": "image_url", "image_url": {"url": url}})
+            if not piezas:
+                continue
+            # Si solo hay texto, se colapsa a string (más compatible con NIM).
+            if len(piezas) == 1 and piezas[0]["type"] == "text":
+                mensajes.append({"role": rol, "content": piezas[0]["text"]})
+            else:
+                mensajes.append({"role": rol, "content": piezas})
+        return mensajes
+
+    @staticmethod
+    def _extraer_openai(datos: dict) -> str:
+        """Extrae el texto de una respuesta chat/completions, limpiando <think>."""
+        try:
+            msg = datos["choices"][0]["message"]
+            contenido = msg.get("content") or ""
+            return _limpiar_think(contenido).strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            logger.error("NIM: respuesta no parseable — %s", exc)
+            return ""
 
     @staticmethod
     def _extraer_texto(datos: dict) -> str:

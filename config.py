@@ -56,6 +56,17 @@ GEMINI_BASE    = "https://generativelanguage.googleapis.com/v1beta"
 # URL final del endpoint generateContent (se construye con el modelo activo).
 GEMINI_URL     = f"{GEMINI_BASE}/models/{GEMINI_MODEL}:generateContent"
 
+# ─── Modo entrenamiento + fallback NVIDIA NIM (TEMPORAL) ──────────────────────
+# Interruptor único del fallback. En producción debe quedar en false: ante un 429
+# Aria guarda estado y se detiene (sin fallback). El fallback a NIM SOLO se activa
+# si TRAINING_MODE = true Y hay NVIDIA_API_KEY. Para retirar el fallback más tarde:
+# pon ARIA_TRAINING_MODE=false (o borra el bloque de fallback en core/brain.py).
+TRAINING_MODE  = os.getenv("ARIA_TRAINING_MODE", "false").lower() == "true"
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
+NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+NVIDIA_MODEL   = os.getenv("ARIA_NVIDIA_MODEL",
+                           "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
+
 # ─── Generación del modelo ────────────────────────────────────────────────────
 # Temperatura 0 → acción reproducible y de baja latencia. Respuestas cortas: el
 # formato PENSAMIENTO/ACCION/FIN cabe de sobra en pocos tokens.
