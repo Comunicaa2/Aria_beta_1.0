@@ -1,0 +1,11 @@
+# Estado y secretos — NO subir al repositorio
+aria_state.json
+vtube_token.txt
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/

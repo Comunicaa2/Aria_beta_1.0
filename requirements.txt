@@ -1,0 +1,8 @@
+# Aria 1.0 — dependencias mínimas (rapidez + pocas dependencias).
+httpx>=0.27.0            # cliente HTTP para la API de Gemini
+mss>=9.0.1              # captura de pantalla en RAM
+Pillow>=10.0.0          # procesado de imagen (resize + JPEG en memoria)
+numpy>=1.24.0           # diff rápido de miniaturas (estabilidad de pantalla)
+pyautogui>=0.9.54       # automatización de mouse y teclado
+psutil>=5.9.0           # telemetría de CPU/RAM/temperatura
+websocket-client>=1.7.0 # avatar VTuber (opcional)
