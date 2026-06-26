@@ -33,7 +33,7 @@ from config import (
     MAX_PASOS_TAREA,
     PAUSA_OVERLOADED,
 )
-from core.brain import Cerebro, LimiteAPIError
+from core.brain import Cerebro, LimiteAPIError, MODELO_GEMINI, MODELO_NIM
 from core.fsm import FSM, Estado
 from core import state as estado_persistente
 from agent.controller import Controller
@@ -85,6 +85,9 @@ class Aria:
         self._exec_lock = threading.Lock()
         self._limite_event = threading.Event()     # se activa si Aria toca 429
 
+        # Acciones de la ÚLTIMA tarea repartidas por modelo (para el Entrenador).
+        self.ultimas_acciones_modelo = {MODELO_GEMINI: 0, MODELO_NIM: 0}
+
         logger.info(
             "%s v%s listo — Físico: %s | Visión: %s | Avatar: %s.",
             AGENT_NAME, AGENT_VERSION,
@@ -108,6 +111,8 @@ class Aria:
             self.cerebro.reset()
         self.stats["tareas"] += 1
         fallos_seguidos = 0
+        # Reparto de acciones por modelo para ESTA tarea (lo lee el Entrenador).
+        self.ultimas_acciones_modelo = {MODELO_GEMINI: 0, MODELO_NIM: 0}
 
         try:
             for ciclo in range(ciclo_inicial, MAX_PASOS_TAREA + 1):
@@ -161,7 +166,8 @@ class Aria:
 
                 # ── 3. ACTUACIÓN ───────────────────────────────────────────
                 self.fsm.a_working()
-                logger.info("▶ ACCION: %s", decision.accion)
+                # Indicador visible del modelo que decidió esta acción.
+                logger.info("[%s] ▶ ACCION: %s", decision.modelo, decision.accion)
                 ok = self.controller.ejecutar(decision.accion, cap)
                 self.stats["acciones"] += 1
 
@@ -171,6 +177,10 @@ class Aria:
 
                 if ok:
                     fallos_seguidos = 0
+                    # Atribuye la acción ejecutada al modelo que la produjo.
+                    self.ultimas_acciones_modelo[decision.modelo] = (
+                        self.ultimas_acciones_modelo.get(decision.modelo, 0) + 1
+                    )
                     image.esperar_estabilidad(max_seg=DELAY_ESTABILIDAD + 1.5)
                     self.cerebro.registrar_resultado(
                         f"Sistema: acción '{decision.accion}' ejecutada. Evalúa la nueva captura."
@@ -254,9 +264,14 @@ class Aria:
                 # Marcar ejecutada (el Entrenador la verificará con visión).
                 a["estado"] = _proto.EJECUTADA
                 a["resultado_aria"] = resultado
+                a["acciones_modelo"] = dict(self.ultimas_acciones_modelo)
+                a["modelo_final"] = self.cerebro.ultimo_modelo
                 a["terminado_en"] = time.time()
                 _proto.escribir_activa(a)
-                logger.info("[ENTRENADOR] Tarea ejecutada (%s) — esperando verificación.", resultado)
+                logger.info("[ENTRENADOR] Tarea ejecutada (%s) [%s | G:%d N:%d] — esperando verificación.",
+                            resultado, self.cerebro.ultimo_modelo,
+                            self.ultimas_acciones_modelo.get(MODELO_GEMINI, 0),
+                            self.ultimas_acciones_modelo.get(MODELO_NIM, 0))
 
                 if resultado == LIMITE:
                     logger.warning("[ENTRENADOR] 429: Aria detiene el consumo de tareas.")

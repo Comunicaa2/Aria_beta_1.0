@@ -46,9 +46,17 @@ from config import (
 
 logger = logging.getLogger("aria.brain")
 
-# Tokens máximos para el fallback NIM (modelo de razonamiento: necesita margen
-# para su cadena de pensamiento antes de la respuesta en formato).
-_NIM_MAX_TOKENS = 1024
+# Identificadores del modelo que produjo una acción (para los logs de Aria y el
+# panel del Entrenador). Sus valores deben coincidir con trainer/protocolo.py.
+MODELO_GEMINI = "GEMINI"
+MODELO_NIM    = "NIM-FALLBACK"
+
+# Tokens máximos para el fallback NIM. El modelo razona en un campo aparte
+# (reasoning_content) que comparte presupuesto con la respuesta: hace falta margen.
+_NIM_MAX_TOKENS = 1536
+# El 30B de razonamiento es lento y NIM puede tardar en el "cold start" inicial;
+# damos un timeout amplio (es un fallback de entrenamiento, no la ruta caliente).
+_NIM_TIMEOUT = 120.0
 # Limpia los bloques de razonamiento <think>…</think> que emiten los modelos de
 # razonamiento, dejando solo la respuesta en formato PENSAMIENTO/ACCION.
 _RE_THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
@@ -74,6 +82,7 @@ class Decision:
     pensamiento: str
     accion: str
     raw: str = ""
+    modelo: str = MODELO_GEMINI   # qué modelo la produjo (GEMINI / NIM-FALLBACK)
 
     @property
     def valida(self) -> bool:
@@ -161,6 +170,8 @@ class Cerebro:
             write=TIMEOUT_WRITE, pool=TIMEOUT_POOL,
         )
         self._cliente = httpx.Client(timeout=self._timeout)
+        # Modelo que respondió la última llamada (GEMINI o NIM-FALLBACK).
+        self.ultimo_modelo = MODELO_GEMINI
         logger.info("Cerebro iniciado — modelo: %s.", GEMINI_MODEL)
 
     # ── API pública ──────────────────────────────────────────────────────────
@@ -184,7 +195,9 @@ class Cerebro:
         if raw:
             self._historial.append({"role": "model", "parts": [{"text": raw}]})
 
-        return parsear(raw)
+        decision = parsear(raw)
+        decision.modelo = self.ultimo_modelo      # marca qué modelo la produjo
+        return decision
 
     def registrar_resultado(self, nota: str) -> None:
         """Inyecta una nota de Sistema (resultado de la acción) como turno de usuario."""
@@ -263,13 +276,16 @@ class Cerebro:
         y el método `_llamar_nim`. Nada más depende de ellos.
         """
         try:
-            return self._llamar_gemini(profundo)
+            texto = self._llamar_gemini(profundo)
+            self.ultimo_modelo = MODELO_GEMINI
+            return texto
         except LimiteAPIError:
             if TRAINING_MODE and NVIDIA_API_KEY:
                 logger.warning("Gemini 429 → fallback a NVIDIA NIM (%s) [TRAINING_MODE].",
                                NVIDIA_MODEL)
                 texto = self._llamar_nim(profundo)
                 if texto:
+                    self.ultimo_modelo = MODELO_NIM
                     return texto
                 logger.error("NIM también falló — sin fallback restante; se detiene.")
             # Producción, fallback desactivado o NIM agotado → propagar (guardar y parar).
@@ -345,7 +361,8 @@ class Cerebro:
         }
 
         try:
-            resp = self._cliente.post(NVIDIA_API_URL, json=payload, headers=headers)
+            resp = self._cliente.post(NVIDIA_API_URL, json=payload,
+                                      headers=headers, timeout=_NIM_TIMEOUT)
         except httpx.HTTPError as exc:
             logger.error("NIM: error de red — %s", exc)
             return ""
@@ -383,9 +400,13 @@ class Cerebro:
     def _extraer_openai(datos: dict) -> str:
         """Extrae el texto de una respuesta chat/completions, limpiando <think>."""
         try:
-            msg = datos["choices"][0]["message"]
-            contenido = msg.get("content") or ""
-            return _limpiar_think(contenido).strip()
+            ch = datos["choices"][0]
+            contenido = ch.get("message", {}).get("content") or ""
+            texto = _limpiar_think(contenido).strip()
+            if not texto:
+                logger.warning("NIM: contenido vacío (finish=%s) — el razonamiento "
+                               "pudo agotar max_tokens.", ch.get("finish_reason"))
+            return texto
         except (KeyError, IndexError, TypeError) as exc:
             logger.error("NIM: respuesta no parseable — %s", exc)
             return ""
