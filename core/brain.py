@@ -287,6 +287,31 @@ _RE_COMANDO_SUELTO = re.compile(
     r"^(?:click|double_click|type|key|hotkey|scroll|wait|done)\b.*$", re.I | re.M
 )
 
+# Verbos de comando para detectar acciones encadenadas ("type calc key enter").
+# Lista EXACTA (a propósito NO incluye 'scroll'). Si tras el primer token aparece
+# otro de estos verbos, se conserva solo el primer comando y se descarta el resto.
+_VERBOS_ACCION = ("click", "double_click", "type", "key", "hotkey", "wait", "done")
+
+
+def _un_solo_comando(accion: str) -> str:
+    """Conserva SOLO el primer comando si la ACCION encadena varios.
+
+    El modelo a veces junta comandos en una línea ('type calc key enter',
+    'hotkey win+r type calc key enter'). Se recorta en el primer verbo de
+    `_VERBOS_ACCION` que aparezca DESPUÉS del primer token y se descarta el resto.
+    """
+    if not accion:
+        return accion
+    tokens = accion.split()
+    for i in range(1, len(tokens)):
+        if tokens[i].lower() in _VERBOS_ACCION:
+            recortada = " ".join(tokens[:i])
+            descartado = " ".join(tokens[i:])
+            logger.warning("Parser: varios comandos en una acción — conservo '%s', "
+                           "descarto '%s'.", recortada, descartado)
+            return recortada
+    return accion
+
 
 def parsear(texto: str) -> Decision:
     """Extrae PENSAMIENTO y ACCION de la respuesta cruda, de forma tolerante."""
@@ -310,6 +335,7 @@ def parsear(texto: str) -> Decision:
         accion = ms.group(0).strip() if ms else ""
 
     accion = accion.strip().rstrip(".")
+    accion = _un_solo_comando(accion)              # FIX-2: solo el primer comando
     return Decision(pensamiento=pensamiento, accion=accion, raw=raw)
 
 
