@@ -16,6 +16,7 @@ Sin relleno conversacional: la salida es siempre un comando estructurado.
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -33,7 +34,7 @@ from config import (
     MAX_HISTORIAL,
     NVIDIA_API_KEY,
     NVIDIA_API_URL,
-    NVIDIA_MODEL,
+    NVIDIA_FALLBACK_MODELS,
     THINK_BUDGET_PROFUNDO,
     THINK_BUDGET_RAPIDO,
     THINK_RESPUESTA_EXTRA,
@@ -48,12 +49,24 @@ logger = logging.getLogger("aria.brain")
 
 # Identificadores del modelo que produjo una acción (para los logs de Aria y el
 # panel del Entrenador). Sus valores deben coincidir con trainer/protocolo.py.
-MODELO_GEMINI = "GEMINI"
-MODELO_NIM    = "NIM-FALLBACK"
+MODELO_GEMINI    = "GEMINI"
+MODELO_NIM_LLAMA = "NIM-LLAMA"   # meta/llama-3.2-90b-vision-instruct
+MODELO_NIM_OMNI  = "NIM-OMNI"    # nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+
+
+def _etiqueta_nim(modelo: str) -> str:
+    """Mapea el id de un modelo NIM a su etiqueta corta (robusto a overrides)."""
+    return MODELO_NIM_LLAMA if "llama" in modelo.lower() else MODELO_NIM_OMNI
+
+# ─── Rate limiter de Gemini ───────────────────────────────────────────────────
+# Gemini 2.5 Flash (free tier) = 15 RPM = 1 req/4s. Forzamos un mínimo de 4.5 s
+# entre llamadas para no chocar contra el límite (margen de seguridad sobre los 4s).
+GEMINI_MIN_INTERVALO = 4.5
 
 # Tokens máximos para el fallback NIM. El modelo razona en un campo aparte
-# (reasoning_content) que comparte presupuesto con la respuesta: hace falta margen.
-_NIM_MAX_TOKENS = 1536
+# (reasoning_content) que comparte presupuesto con la respuesta: necesita margen
+# amplio para no agotar el budget antes de emitir la respuesta en formato.
+_NIM_MAX_TOKENS = 2048
 # El 30B de razonamiento es lento y NIM puede tardar en el "cold start" inicial;
 # damos un timeout amplio (es un fallback de entrenamiento, no la ruta caliente).
 _NIM_TIMEOUT = 120.0
@@ -61,6 +74,20 @@ _NIM_TIMEOUT = 120.0
 # razonamiento, dejando solo la respuesta en formato PENSAMIENTO/ACCION.
 _RE_THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
 _RE_THINK_ABIERTO = re.compile(r"<think>.*\Z", re.S | re.I)
+
+# Aislamiento agresivo del bloque de formato en la salida de NIM, que a veces viene
+# envuelta en JSON/literales y deja basura (p. ej. "...ACCION: done'}]"). Extraemos
+# SOLO PENSAMIENTO…ACCION y descartamos todo lo demás (antes y después).
+# Las comillas opcionales (["']?) toleran que el modelo envuelva el bloque en
+# JSON/diccionario: "PENSAMIENTO": "...", "ACCION": "click 1 2".
+_RE_BLOQUE_FORMATO = re.compile(
+    r"PENSAMIENTO\s*[\"']?\s*:\s*[\"']?(?P<pens>.*?)[\"']?\s*"
+    r"ACCI[OÓ]N\s*[\"']?\s*:\s*[\"']?(?P<acc>.+?)\s*(?:\bFIN\b|[\r\n]|$)",
+    re.I | re.S,
+)
+_RE_SOLO_ACCION = re.compile(
+    r"ACCI[OÓ]N\s*[\"']?\s*:\s*[\"']?(?P<acc>.+?)\s*(?:\bFIN\b|[\r\n}\]]|$)", re.I | re.S
+)
 
 
 def _limpiar_think(texto: str) -> str:
@@ -70,6 +97,33 @@ def _limpiar_think(texto: str) -> str:
     texto = _RE_THINK.sub("", texto)
     texto = _RE_THINK_ABIERTO.sub("", texto)   # <think> sin cierre (cortado) → fuera
     return texto.strip()
+
+
+def _limpiar_accion(acc: str) -> str:
+    """Recorta basura JSON/comillas del valor de ACCION (p. ej. "done'}]" → "done")."""
+    acc = re.split(r"[\r\n}\]]", acc)[0]             # corta en el 1.er ruido estructural
+    return acc.strip().strip("'\"").rstrip("'\"}],) ").strip()
+
+
+def _aislar_formato(texto: str) -> str:
+    """
+    Limpieza AGRESIVA para NIM: extrae con regex solo el bloque PENSAMIENTO/ACCION
+    y lo reconstruye como PENSAMIENTO/ACCION/FIN, descartando todo lo demás. Si no
+    hay PENSAMIENTO, intenta aislar al menos la línea ACCION. Si no reconoce nada,
+    devuelve el texto tal cual (que lo intente el parser general).
+    """
+    if not texto:
+        return texto
+    texto = texto.replace("*", "")               # quita markdown (negritas/viñetas)
+    m = _RE_BLOQUE_FORMATO.search(texto)
+    if m:
+        pens = " ".join(m.group("pens").split())
+        acc = _limpiar_accion(m.group("acc"))
+        return f"PENSAMIENTO: {pens}\nACCION: {acc}\nFIN"
+    m2 = _RE_SOLO_ACCION.search(texto)
+    if m2:
+        return f"ACCION: {_limpiar_accion(m2.group('acc'))}\nFIN"
+    return texto
 
 
 class LimiteAPIError(Exception):
@@ -82,7 +136,7 @@ class Decision:
     pensamiento: str
     accion: str
     raw: str = ""
-    modelo: str = MODELO_GEMINI   # qué modelo la produjo (GEMINI / NIM-FALLBACK)
+    modelo: str = MODELO_GEMINI   # qué modelo la produjo (GEMINI / NIM-LLAMA / NIM-OMNI)
 
     @property
     def valida(self) -> bool:
@@ -121,6 +175,15 @@ REGLAS CRÍTICAS:
 5. Si la tarea ya está hecha, responde con ACCION: done.
 6. Termina SIEMPRE con FIN en su propia línea.
 """
+
+# System prompt para los modelos de fallback NIM (propensos a divagar, usar markdown
+# o copiar la plantilla de comandos). Anteponemos una orden tajante de formato.
+NIM_SYSTEM_INSTRUCTION = (
+    "RESPONDE SOLO con el bloque PENSAMIENTO/ACCION/FIN. Máximo 3 líneas en total. "
+    "Nada más. TEXTO PLANO: prohibido markdown, asteriscos, negritas, viñetas o listas. "
+    "En ACCION pon UN comando con números REALES leídos de la imagen "
+    "(nunca escribas literalmente 'X Y').\n\n"
+) + SYSTEM_INSTRUCTION
 
 # ─── Parsers de la respuesta ──────────────────────────────────────────────────
 _RE_PENSAMIENTO = re.compile(r"PENSAMIENTO\s*:\s*(.+?)(?:\n\s*ACCI[OÓ]N\s*:|\Z)",
@@ -170,8 +233,12 @@ class Cerebro:
             write=TIMEOUT_WRITE, pool=TIMEOUT_POOL,
         )
         self._cliente = httpx.Client(timeout=self._timeout)
-        # Modelo que respondió la última llamada (GEMINI o NIM-FALLBACK).
+        # Modelo que respondió la última llamada (GEMINI / NIM-LLAMA / NIM-OMNI).
         self.ultimo_modelo = MODELO_GEMINI
+        # Modelo NIM concreto usado en el último fallback (para logs/diagnóstico).
+        self.ultimo_nim = ""
+        # Rate limiter: instante (monotonic) de la última llamada a Gemini.
+        self._ultima_gemini = 0.0
         logger.info("Cerebro iniciado — modelo: %s.", GEMINI_MODEL)
 
     # ── API pública ──────────────────────────────────────────────────────────
@@ -281,19 +348,32 @@ class Cerebro:
             return texto
         except LimiteAPIError:
             if TRAINING_MODE and NVIDIA_API_KEY:
-                logger.warning("Gemini 429 → fallback a NVIDIA NIM (%s) [TRAINING_MODE].",
-                               NVIDIA_MODEL)
-                texto = self._llamar_nim(profundo)
-                if texto:
-                    self.ultimo_modelo = MODELO_NIM
-                    return texto
-                logger.error("NIM también falló — sin fallback restante; se detiene.")
-            # Producción, fallback desactivado o NIM agotado → propagar (guardar y parar).
+                # Cadena NIM: se prueba cada modelo en orden hasta que uno responda.
+                for modelo in NVIDIA_FALLBACK_MODELS:
+                    logger.warning("Gemini 429 → fallback NIM '%s' [TRAINING_MODE].", modelo)
+                    texto = self._llamar_nim(modelo, profundo)
+                    if texto:
+                        self.ultimo_modelo = _etiqueta_nim(modelo)
+                        self.ultimo_nim = modelo
+                        return texto
+                    logger.warning("NIM '%s' sin respuesta — probando el siguiente.", modelo)
+                logger.error("Todos los modelos NIM fallaron — se detiene.")
+            # Producción, fallback desactivado o cadena NIM agotada → propagar.
             raise
+
+    # ── Rate limiter de Gemini (15 RPM → ≥ 4.5 s entre llamadas) ────────────────
+    def _rate_limit_gemini(self) -> None:
+        """Garantiza un mínimo de GEMINI_MIN_INTERVALO s entre llamadas a Gemini."""
+        espera = GEMINI_MIN_INTERVALO - (time.monotonic() - self._ultima_gemini)
+        if espera > 0:
+            logger.info("Rate limit: esperando %.1fs", espera)
+            time.sleep(espera)
+        self._ultima_gemini = time.monotonic()
 
     # ── Llamada HTTP a Gemini (principal) ───────────────────────────────────────
     def _llamar_gemini(self, profundo: bool) -> str:
         """POST a generateContent. "" si error recuperable; lanza LimiteAPIError en 429."""
+        self._rate_limit_gemini()
         budget = THINK_BUDGET_PROFUNDO if profundo else THINK_BUDGET_RAPIDO
         # Con pensamiento activo, la respuesta visible necesita tokens aparte.
         max_tokens = GEN_MAX_TOKENS + (THINK_RESPUESTA_EXTRA + budget if budget else 0)
@@ -338,15 +418,16 @@ class Cerebro:
         return self._extraer_texto(resp.json())
 
     # ── Fallback NVIDIA NIM (TEMPORAL, API estilo OpenAI) ───────────────────────
-    def _llamar_nim(self, profundo: bool) -> str:
+    def _llamar_nim(self, modelo: str, profundo: bool) -> str:
         """
-        Llama a NVIDIA NIM (formato chat/completions de OpenAI) con el MISMO system
-        prompt e historial (convertidos al formato OpenAI). Devuelve el texto en el
-        formato PENSAMIENTO/ACCION, o "" si falla (incluido 429 de NIM). Nunca lanza.
+        Llama a un modelo de NVIDIA NIM (chat/completions estilo OpenAI) con un
+        system prompt de formato estricto + el historial. Devuelve el texto YA
+        AISLADO al bloque PENSAMIENTO/ACCION/FIN (limpieza agresiva), o "" si falla.
+        Sirve tanto para el multimodal no-razonador como para el razonador omni.
         """
-        mensajes = self._a_openai(self._gc_imagenes())
+        mensajes = self._a_openai(self._gc_imagenes(), NIM_SYSTEM_INSTRUCTION)
         payload = {
-            "model": NVIDIA_MODEL,
+            "model": modelo,
             "messages": mensajes,
             "temperature": GEN_TEMPERATURE,
             "top_p": GEN_TOP_P,
@@ -364,19 +445,20 @@ class Cerebro:
             resp = self._cliente.post(NVIDIA_API_URL, json=payload,
                                       headers=headers, timeout=_NIM_TIMEOUT)
         except httpx.HTTPError as exc:
-            logger.error("NIM: error de red — %s", exc)
+            logger.error("NIM '%s': error de red — %s", modelo, exc)
             return ""
 
         if resp.status_code != 200:
-            logger.error("NIM: HTTP %d — %s", resp.status_code, resp.text[:200])
+            logger.error("NIM '%s': HTTP %d — %s", modelo, resp.status_code, resp.text[:200])
             return ""
 
-        return self._extraer_openai(resp.json())
+        # Limpieza AGRESIVA: aísla el bloque de formato y descarta el ruido JSON.
+        return _aislar_formato(self._extraer_openai(resp.json()))
 
     @staticmethod
-    def _a_openai(contents: list[dict]) -> list[dict]:
+    def _a_openai(contents: list[dict], system: str = SYSTEM_INSTRUCTION) -> list[dict]:
         """Convierte el historial (formato Gemini) a `messages` de OpenAI/NIM."""
-        mensajes: list[dict] = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+        mensajes: list[dict] = [{"role": "system", "content": system}]
         for m in contents:
             rol = "assistant" if m.get("role") == "model" else "user"
             piezas: list[dict] = []
@@ -398,15 +480,27 @@ class Cerebro:
 
     @staticmethod
     def _extraer_openai(datos: dict) -> str:
-        """Extrae el texto de una respuesta chat/completions, limpiando <think>."""
+        """
+        Extrae el texto de una respuesta chat/completions, limpiando <think>.
+
+        Salvaguarda: este modelo razonador a veces deja `content` vacío (agota el
+        presupuesto razonando, finish=length) pero escribe el bloque de formato en
+        `reasoning_content`. Si ahí hay un marcador ACCION explícito, lo rescatamos.
+        """
         try:
             ch = datos["choices"][0]
-            contenido = ch.get("message", {}).get("content") or ""
-            texto = _limpiar_think(contenido).strip()
-            if not texto:
-                logger.warning("NIM: contenido vacío (finish=%s) — el razonamiento "
-                               "pudo agotar max_tokens.", ch.get("finish_reason"))
-            return texto
+            msg = ch.get("message", {})
+            texto = _limpiar_think(msg.get("content") or "").strip()
+            if texto:
+                return texto
+            razon = _limpiar_think(msg.get("reasoning_content") or "").strip()
+            if re.search(r"ACCI[OÓ]N\s*[\"']?\s*:", razon, re.I):
+                logger.warning("NIM: contenido vacío (finish=%s) — rescatando ACCION "
+                               "del razonamiento.", ch.get("finish_reason"))
+                return razon
+            logger.warning("NIM: contenido vacío y sin ACCION en el razonamiento "
+                           "(finish=%s).", ch.get("finish_reason"))
+            return ""
         except (KeyError, IndexError, TypeError) as exc:
             logger.error("NIM: respuesta no parseable — %s", exc)
             return ""

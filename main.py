@@ -33,7 +33,8 @@ from config import (
     MAX_PASOS_TAREA,
     PAUSA_OVERLOADED,
 )
-from core.brain import Cerebro, LimiteAPIError, MODELO_GEMINI, MODELO_NIM
+from core.brain import (Cerebro, LimiteAPIError,
+                        MODELO_GEMINI, MODELO_NIM_LLAMA, MODELO_NIM_OMNI)
 from core.fsm import FSM, Estado
 from core import state as estado_persistente
 from agent.controller import Controller
@@ -86,7 +87,8 @@ class Aria:
         self._limite_event = threading.Event()     # se activa si Aria toca 429
 
         # Acciones de la ÚLTIMA tarea repartidas por modelo (para el Entrenador).
-        self.ultimas_acciones_modelo = {MODELO_GEMINI: 0, MODELO_NIM: 0}
+        self.ultimas_acciones_modelo = {MODELO_GEMINI: 0,
+                                        MODELO_NIM_LLAMA: 0, MODELO_NIM_OMNI: 0}
 
         logger.info(
             "%s v%s listo — Físico: %s | Visión: %s | Avatar: %s.",
@@ -112,7 +114,8 @@ class Aria:
         self.stats["tareas"] += 1
         fallos_seguidos = 0
         # Reparto de acciones por modelo para ESTA tarea (lo lee el Entrenador).
-        self.ultimas_acciones_modelo = {MODELO_GEMINI: 0, MODELO_NIM: 0}
+        self.ultimas_acciones_modelo = {MODELO_GEMINI: 0,
+                                        MODELO_NIM_LLAMA: 0, MODELO_NIM_OMNI: 0}
 
         try:
             for ciclo in range(ciclo_inicial, MAX_PASOS_TAREA + 1):
@@ -268,10 +271,11 @@ class Aria:
                 a["modelo_final"] = self.cerebro.ultimo_modelo
                 a["terminado_en"] = time.time()
                 _proto.escribir_activa(a)
-                logger.info("[ENTRENADOR] Tarea ejecutada (%s) [%s | G:%d N:%d] — esperando verificación.",
+                logger.info("[ENTRENADOR] Tarea ejecutada (%s) [%s | G:%d L:%d O:%d] — esperando verificación.",
                             resultado, self.cerebro.ultimo_modelo,
                             self.ultimas_acciones_modelo.get(MODELO_GEMINI, 0),
-                            self.ultimas_acciones_modelo.get(MODELO_NIM, 0))
+                            self.ultimas_acciones_modelo.get(MODELO_NIM_LLAMA, 0),
+                            self.ultimas_acciones_modelo.get(MODELO_NIM_OMNI, 0))
 
                 if resultado == LIMITE:
                     logger.warning("[ENTRENADOR] 429: Aria detiene el consumo de tareas.")

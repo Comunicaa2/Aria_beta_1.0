@@ -64,8 +64,16 @@ GEMINI_URL     = f"{GEMINI_BASE}/models/{GEMINI_MODEL}:generateContent"
 TRAINING_MODE  = os.getenv("ARIA_TRAINING_MODE", "false").lower() == "true"
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-NVIDIA_MODEL   = os.getenv("ARIA_NVIDIA_MODEL",
-                           "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
+
+# Cadena de fallback NIM, probada EN ORDEN tras un 429 de Gemini:
+#   1º un multimodal NO razonador (responde directo en formato, rápido y limpio).
+#   2º el razonador omni como último recurso (más lento e inconsistente).
+# Verificado disponible y consistente: meta/llama-3.2-90b-vision-instruct (4/4).
+NVIDIA_MODEL_PRIMARIO   = os.getenv("ARIA_NVIDIA_MODEL",
+                                    "meta/llama-3.2-90b-vision-instruct")
+NVIDIA_MODEL_SECUNDARIO = os.getenv("ARIA_NVIDIA_MODEL_2",
+                                    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
+NVIDIA_FALLBACK_MODELS  = [NVIDIA_MODEL_PRIMARIO, NVIDIA_MODEL_SECUNDARIO]
 
 # ─── Generación del modelo ────────────────────────────────────────────────────
 # Temperatura 0 → acción reproducible y de baja latencia. Respuestas cortas: el
