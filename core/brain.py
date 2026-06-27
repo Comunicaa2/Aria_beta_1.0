@@ -14,7 +14,9 @@ Responsabilidades:
 Sin relleno conversacional: la salida es siempre un comando estructurado.
 """
 
+import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -62,6 +64,95 @@ def _etiqueta_nim(modelo: str) -> str:
 # Gemini 2.5 Flash (free tier) = 15 RPM = 1 req/4s. Forzamos un mínimo de 4.5 s
 # entre llamadas para no chocar contra el límite (margen de seguridad sobre los 4s).
 GEMINI_MIN_INTERVALO = 4.5
+
+# ── Rate limiter CROSS-PROCESS (compartido con el entrenador) ─────────────────
+# Aria y el entrenador comparten la cuota de 15 RPM de la MISMA API key. Se
+# coordinan por un archivo de marca (tasks/rate_gemini.json) protegido con un
+# mutex de exclusión mutua (lock O_EXCL): antes de cada llamada a Gemini se espera
+# a que hayan pasado ≥ GEMINI_MIN_INTERVALO s desde la última llamada de CUALQUIER
+# proceso. Usa time.time() (reloj de pared, comparable entre procesos). Si el
+# archivo no está disponible, cae a un piso en memoria (no rompe el comportamiento).
+_RATE_DIR  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tasks")
+_RATE_FILE = os.path.join(_RATE_DIR, "rate_gemini.json")
+_RATE_LOCK = os.path.join(_RATE_DIR, "rate_gemini.lock")
+_RATE_LOCK_TIMEOUT = 15.0    # s máx esperando el mutex antes de degradar a local
+_RATE_LOCK_STALE   = 12.0    # s: un lock más viejo es huérfano (proceso caído) → robar
+_rate_ultima_local = 0.0     # piso en memoria (monotonic) si el archivo falla
+
+
+def _rate_lock_adquirir() -> bool:
+    """Mutex inter-proceso por archivo (O_EXCL). True si lo adquirió."""
+    inicio = time.monotonic()
+    while True:
+        try:
+            fd = os.open(_RATE_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            try:                                   # robar lock huérfano (proceso caído)
+                if time.time() - os.path.getmtime(_RATE_LOCK) > _RATE_LOCK_STALE:
+                    os.remove(_RATE_LOCK)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() - inicio > _RATE_LOCK_TIMEOUT:
+                return False
+            time.sleep(0.05)
+        except OSError:
+            return False
+
+
+def _rate_lock_liberar() -> None:
+    try:
+        os.remove(_RATE_LOCK)
+    except OSError:
+        pass
+
+
+def _rate_limit_compartido() -> None:
+    """
+    Garantiza ≥ GEMINI_MIN_INTERVALO s entre llamadas a Gemini de CUALQUIER proceso
+    (Aria + entrenador), vía el archivo de marca bajo mutex. Atómico: la sección
+    leer→esperar→escribir corre dentro del lock. Degrada a piso en memoria si el
+    sistema de archivos no está disponible (sin romper nada).
+    """
+    global _rate_ultima_local
+    try:
+        os.makedirs(_RATE_DIR, exist_ok=True)
+    except OSError:
+        pass
+
+    if not _rate_lock_adquirir():                  # no se pudo coordinar → piso local
+        espera = GEMINI_MIN_INTERVALO - (time.monotonic() - _rate_ultima_local)
+        if espera > 0:
+            logger.info("Rate limit (local): esperando %.1fs", espera)
+            time.sleep(espera)
+        _rate_ultima_local = time.monotonic()
+        return
+
+    try:
+        ultima = 0.0
+        try:
+            with open(_RATE_FILE, "r", encoding="utf-8") as f:
+                ultima = float(json.load(f).get("ultima_llamada", 0.0))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            ultima = 0.0
+        # Clamp ante saltos del reloj de pared (NTP): nunca esperar más del intervalo.
+        espera = max(0.0, min(GEMINI_MIN_INTERVALO - (time.time() - ultima),
+                              GEMINI_MIN_INTERVALO))
+        if espera > 0:
+            logger.info("Rate limit (compartido): esperando %.1fs", espera)
+            time.sleep(espera)
+        try:                                       # marca esta llamada (escritura atómica)
+            tmp = _RATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"ultima_llamada": time.time()}, f)
+            os.replace(tmp, _RATE_FILE)
+        except OSError:
+            pass
+        _rate_ultima_local = time.monotonic()
+    finally:
+        _rate_lock_liberar()
 
 # Tokens máximos para el fallback NIM. El modelo razona en un campo aparte
 # (reasoning_content) que comparte presupuesto con la respuesta: necesita margen
@@ -162,6 +253,8 @@ double_click X Y    doble clic en (X, Y)
 type TEXTO          escribe el texto exacto indicado
 key TECLA           pulsa una tecla (key enter / key esc / key tab / key f5)
 hotkey A+B          combinación (hotkey win+r / hotkey ctrl+c / hotkey alt+f4)
+scroll up N         desplaza hacia arriba N clics de rueda (usa 3-10; ej: scroll up 5)
+scroll down N       desplaza hacia abajo N clics de rueda (usa 3-10; ej: scroll down 5)
 wait N              espera N segundos (entero)
 done                úsalo SOLO cuando la tarea esté completamente terminada
 
@@ -191,7 +284,7 @@ _RE_PENSAMIENTO = re.compile(r"PENSAMIENTO\s*:\s*(.+?)(?:\n\s*ACCI[OÓ]N\s*:|\Z)
 _RE_ACCION      = re.compile(r"ACCI[OÓ]N\s*:\s*(.+?)(?:\n|FIN|\Z)", re.I | re.S)
 # Respaldo: si el modelo omite el prefijo, reconoce un comando suelto.
 _RE_COMANDO_SUELTO = re.compile(
-    r"^(?:click|double_click|type|key|hotkey|wait|done)\b.*$", re.I | re.M
+    r"^(?:click|double_click|type|key|hotkey|scroll|wait|done)\b.*$", re.I | re.M
 )
 
 
@@ -237,8 +330,7 @@ class Cerebro:
         self.ultimo_modelo = MODELO_GEMINI
         # Modelo NIM concreto usado en el último fallback (para logs/diagnóstico).
         self.ultimo_nim = ""
-        # Rate limiter: instante (monotonic) de la última llamada a Gemini.
-        self._ultima_gemini = 0.0
+        # El rate limiter ahora es CROSS-PROCESS (módulo, archivo compartido).
         logger.info("Cerebro iniciado — modelo: %s.", GEMINI_MODEL)
 
     # ── API pública ──────────────────────────────────────────────────────────
@@ -363,12 +455,9 @@ class Cerebro:
 
     # ── Rate limiter de Gemini (15 RPM → ≥ 4.5 s entre llamadas) ────────────────
     def _rate_limit_gemini(self) -> None:
-        """Garantiza un mínimo de GEMINI_MIN_INTERVALO s entre llamadas a Gemini."""
-        espera = GEMINI_MIN_INTERVALO - (time.monotonic() - self._ultima_gemini)
-        if espera > 0:
-            logger.info("Rate limit: esperando %.1fs", espera)
-            time.sleep(espera)
-        self._ultima_gemini = time.monotonic()
+        """Coordina ≥ GEMINI_MIN_INTERVALO s entre llamadas a Gemini, COMPARTIDO con
+        el entrenador vía tasks/rate_gemini.json (mutex de exclusión mutua)."""
+        _rate_limit_compartido()
 
     # ── Llamada HTTP a Gemini (principal) ───────────────────────────────────────
     def _llamar_gemini(self, profundo: bool) -> str:

@@ -45,6 +45,13 @@ _TOL_PX        = 3
 _ESPERA_REINT  = 0.18
 _WAIT_MAX      = 30.0
 
+# Unidades de rueda por "clic" de scroll. En Windows un notch del ratón = 120
+# (WHEEL_DELTA); pyautogui.scroll() recibe esas unidades crudas, así que cada N
+# equivale a N notches reales de la rueda.
+_SCROLL_PASO   = 120
+_SCROLL_DEF    = 3          # N por defecto si no se especifica
+_SCROLL_MAX    = 30         # tope defensivo de clics (el modelo a veces pide N enorme)
+
 # Combos que abren un diálogo del SO: tras enviarlos hay que esperar a que la
 # ventana aparezca antes de escribir, o el siguiente 'type' cae al vacío.
 _COMBOS_DIALOGO = {
@@ -60,6 +67,8 @@ _RE_KEY          = re.compile(r"^key\s+(\S+)\s*$",                       re.I)
 # Acepta combinación (win+r) y tecla única (win) — el modelo a veces usa una sola.
 _RE_HOTKEY       = re.compile(r"^hotkey\s+([\w]+(?:\+[\w]+)*)\s*$",      re.I)
 _RE_WAIT         = re.compile(r"^wait\s+(\d+(?:\.\d+)?)\s*$",            re.I)
+# scroll up/down [N] — N opcional (por defecto _SCROLL_DEF). Acepta arriba/abajo.
+_RE_SCROLL       = re.compile(r"^scroll\s+(up|down|arriba|abajo)(?:\s+(\d+))?\s*$", re.I)
 _RE_DONE         = re.compile(r"^done\s*$",                              re.I)
 
 
@@ -119,6 +128,11 @@ class Controller:
                 teclas = [t.strip() for t in m.group(1).split("+") if t.strip()]
                 return self._hotkey(teclas)
 
+            m = _RE_SCROLL.match(cmd)
+            if m:
+                n = int(m.group(2)) if m.group(2) else _SCROLL_DEF
+                return self._scroll(m.group(1), n)
+
             m = _RE_WAIT.match(cmd)
             if m:
                 return self._wait(float(m.group(1)))
@@ -166,6 +180,19 @@ class Controller:
         logger.warning("mouse.%s ABORTADO → pedido (%d,%d), cursor en (%d,%d).",
                        etiqueta, x, y, px, py)
         return False
+
+    def _scroll(self, direccion: str, n: int) -> bool:
+        """Desplaza N clics de rueda. up/arriba → positivo; down/abajo → negativo.
+        N se acota a [1, _SCROLL_MAX] (el modelo a veces pide cantidades enormes)."""
+        n = min(max(1, n), _SCROLL_MAX)
+        arriba = direccion.lower() in ("up", "arriba")
+        clicks = n * _SCROLL_PASO * (1 if arriba else -1)
+        if self.simulacion:
+            logger.info("[SIM] scroll %s %d", direccion.lower(), n)
+            return True
+        pyautogui.scroll(clicks)
+        logger.info("scroll %s %d (%d unidades).", direccion.lower(), n, clicks)
+        return True
 
     # ── Teclado ──────────────────────────────────────────────────────────────────
     def _type(self, texto: str) -> bool:
