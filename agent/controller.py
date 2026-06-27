@@ -52,6 +52,12 @@ _SCROLL_PASO   = 120
 _SCROLL_DEF    = 3          # N por defecto si no se especifica
 _SCROLL_MAX    = 30         # tope defensivo de clics (el modelo a veces pide N enorme)
 
+# Margen de seguridad anti-esquina. pyautogui.FAILSAFE aborta TODO el programa si
+# el cursor llega a una esquina de la pantalla; el modelo a veces pide coords como
+# (0, 720). Rechazamos cualquier destino dentro de este margen de las 4 esquinas
+# ANTES de mover el ratón — sin desactivar FAILSAFE (la protección sigue intacta).
+_MARGEN_ESQUINA = 60        # px a cada lado de cada esquina (zona prohibida)
+
 # Combos que abren un diálogo del SO: tras enviarlos hay que esperar a que la
 # ventana aparezca antes de escribir, o el siguiente 'type' cae al vacío.
 _COMBOS_DIALOGO = {
@@ -151,6 +157,13 @@ class Controller:
     def _click(self, x_img: int, y_img: int, cap: Optional[Captura], doble: bool) -> bool:
         x, y = (cap.real(x_img, y_img) if cap else (x_img, y_img))
         etiqueta = "double_click" if doble else "click"
+        if self._en_zona_esquina(x, y):
+            logger.warning(
+                "Controller: coordenadas en zona prohibida (esquina), modelo debe "
+                "recalcular — %s real(%d,%d) [img(%d,%d)].",
+                etiqueta, x, y, x_img, y_img,
+            )
+            return False
         if self.simulacion:
             logger.info("[SIM] %s img(%d,%d) → real(%d,%d)", etiqueta, x_img, y_img, x, y)
             return True
@@ -162,6 +175,28 @@ class Controller:
             pyautogui.click()
         logger.info("%s en real(%d,%d) [img(%d,%d)].", etiqueta, x, y, x_img, y_img)
         return True
+
+    def _tamano_pantalla(self) -> Optional[tuple[int, int]]:
+        """Tamaño real de la pantalla (ancho, alto), o None si no se puede medir."""
+        if pyautogui is None:
+            return None
+        try:
+            ancho, alto = pyautogui.size()
+            return int(ancho), int(alto)
+        except Exception:                          # noqa: BLE001
+            return None
+
+    def _en_zona_esquina(self, x: int, y: int) -> bool:
+        """True si (x, y) cae dentro de _MARGEN_ESQUINA de alguna de las 4 esquinas
+        de la pantalla (la zona que dispara el FailSafe). Si no se puede medir la
+        pantalla (modo SIMULACIÓN / sin pyautogui), no bloquea (devuelve False)."""
+        tam = self._tamano_pantalla()
+        if tam is None:
+            return False
+        ancho, alto = tam
+        cerca_x = x <= _MARGEN_ESQUINA or x >= ancho - 1 - _MARGEN_ESQUINA
+        cerca_y = y <= _MARGEN_ESQUINA or y >= alto - 1 - _MARGEN_ESQUINA
+        return cerca_x and cerca_y
 
     def _mover_verificado(self, x: int, y: int, etiqueta: str) -> bool:
         """Mueve VISIBLEMENTE a (x, y) y confirma con el cursor medido; re-ancla
