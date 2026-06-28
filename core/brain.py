@@ -248,25 +248,39 @@ ACCION: <un solo comando válido>
 FIN
 
 COMANDOS VÁLIDOS (uno solo por respuesta):
-click X Y           clic izquierdo en el punto (X, Y) de la imagen
-double_click X Y    doble clic en (X, Y)
-type TEXTO          escribe el texto exacto indicado
-key TECLA           pulsa una tecla (key enter / key esc / key tab / key f5)
-hotkey A+B          combinación (hotkey win+r / hotkey ctrl+c / hotkey alt+f4)
-scroll up N         desplaza hacia arriba N clics de rueda (usa 3-10; ej: scroll up 5)
-scroll down N       desplaza hacia abajo N clics de rueda (usa 3-10; ej: scroll down 5)
-wait N              espera N segundos (entero)
-done                úsalo SOLO cuando la tarea esté completamente terminada
+launch_app NOMBRE       abre una app por su nombre — ej: launch_app notepad
+click X Y               clic izquierdo — ej: click 640 360
+double_click X Y        doble clic — ej: double_click 120 200
+right_click X Y         clic derecho (menú contextual) — ej: right_click 500 300
+middle_click X Y        clic central — ej: middle_click 640 360
+hover X Y               mueve el cursor sin clicar (menús al pasar) — ej: hover 800 40
+drag X1 Y1 X2 Y2        arrastra de un punto a otro — ej: drag 100 100 400 400
+type TEXTO              escribe el texto exacto — ej: type Hola mundo
+key TECLA               pulsa una tecla — ej: key enter
+hotkey A+B              combinación de teclas — ej: hotkey ctrl+s
+hold_key MOD+click X Y  mantén MOD (shift/ctrl/alt) y clica — ej: hold_key shift+click 300 400
+hold_key MOD+key T      mantén MOD y pulsa una tecla — ej: hold_key ctrl+key a
+find_text "TEXTO"       localiza un texto y te devuelve sus coords — ej: find_text "Guardar"
+find_image RUTA         localiza un PNG y te devuelve sus coords — ej: find_image C:\\ui\\ok.png
+focus_window "TITULO"   trae una ventana al frente — ej: focus_window "Bloc de notas"
+scroll up N             desplaza hacia arriba N — ej: scroll up 5
+scroll down N           desplaza hacia abajo N — ej: scroll down 5
+hscroll DIR N           scroll horizontal (left/right) — ej: hscroll right 5
+wait N                  espera N segundos — ej: wait 2
+done                    úsalo SOLO cuando la tarea esté completamente terminada
 
 REGLAS CRÍTICAS:
 1. UN SOLO comando en la línea ACCION. Jamás dos comandos ni listas (1., 2., -).
 2. COORDENADAS: las X Y son píxeles de la IMAGEN que recibes (su tamaño se indica
    en el mensaje). Lee la posición real del elemento en la captura.
-3. PRIORIDAD AL TECLADO: para abrir programas o buscar usa primero el teclado
-   (hotkey win+r → type programa → key enter). Reserva el clic para botones sin atajo.
-4. PENSAMIENTO máximo 2 líneas. Nada de explicaciones largas.
-5. Si la tarea ya está hecha, responde con ACCION: done.
-6. Termina SIEMPRE con FIN en su propia línea.
+3. PARA ABRIR PROGRAMAS usa launch_app (ej: launch_app calc). NO uses win+r ni
+   otras hotkeys del sistema: están BLOQUEADAS por seguridad. Reserva el clic para
+   botones sin atajo.
+4. ¿No estás segura de las coordenadas? Usa find_text "etiqueta" (o find_image
+   ruta.png): te devolverán las coords y luego harás click X Y sobre ellas.
+5. PENSAMIENTO máximo 2 líneas. Nada de explicaciones largas.
+6. Si la tarea ya está hecha, responde con ACCION: done.
+7. Termina SIEMPRE con FIN en su propia línea.
 """
 
 # System prompt para los modelos de fallback NIM (propensos a divagar, usar markdown
@@ -284,7 +298,9 @@ _RE_PENSAMIENTO = re.compile(r"PENSAMIENTO\s*:\s*(.+?)(?:\n\s*ACCI[OÓ]N\s*:|\Z)
 _RE_ACCION      = re.compile(r"ACCI[OÓ]N\s*:\s*(.+?)(?:\n|FIN|\Z)", re.I | re.S)
 # Respaldo: si el modelo omite el prefijo, reconoce un comando suelto.
 _RE_COMANDO_SUELTO = re.compile(
-    r"^(?:click|double_click|type|key|hotkey|scroll|wait|done)\b.*$", re.I | re.M
+    r"^(?:launch_app|double_click|right_click|middle_click|hold_key|find_text|"
+    r"find_image|focus_window|hscroll|click|type|key|hotkey|scroll|drag|hover|"
+    r"wait|done)\b.*$", re.I | re.M
 )
 
 # Verbos de comando para detectar acciones encadenadas ("type calc key enter").
