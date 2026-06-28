@@ -9,3 +9,10 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# Artefactos de runtime del rate limiter / IPC en tasks/ (NO los archivos de
+# estado queue/active/completed/stats.json, que sí se trackean intencionalmente).
+tasks/rate_gemini.json
+tasks/rate_gemini.lock
+tasks/*.lock
+tasks/*.tmp
