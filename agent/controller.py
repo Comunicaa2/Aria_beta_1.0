@@ -7,6 +7,7 @@ Comandos válidos (uno por turno):
     click X Y           clic izquierdo en (X, Y) del espacio IMAGEN
     double_click X Y    doble clic en (X, Y) del espacio IMAGEN
     right_click X Y     clic derecho en (X, Y) (menú contextual)
+    drag X1 Y1 X2 Y2    arrastra desde (X1,Y1) hasta (X2,Y2) (mover/seleccionar)
     type TEXTO          escribe el texto exacto
     key TECLA           pulsa una tecla       (key enter / key esc / key tab)
     hotkey A+B[+C]      combinación           (hotkey ctrl+c / hotkey ctrl+s)
@@ -107,6 +108,7 @@ def _es_hotkey_prohibida(norm: list[str]) -> bool:
 _RE_CLICK        = re.compile(r"^click\s+(-?\d+)\s+(-?\d+)\s*$",        re.I)
 _RE_DOUBLE_CLICK = re.compile(r"^double_click\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
 _RE_RIGHT_CLICK  = re.compile(r"^right_click\s+(-?\d+)\s+(-?\d+)\s*$",   re.I)
+_RE_DRAG         = re.compile(r"^drag\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
 _RE_TYPE         = re.compile(r"^type\s+(.+)$",                          re.I | re.S)
 _RE_KEY          = re.compile(r"^key\s+(\S+)\s*$",                       re.I)
 # Acepta combinación (win+r) y tecla única (win) — el modelo a veces usa una sola.
@@ -185,6 +187,11 @@ class Controller:
             m = _RE_RIGHT_CLICK.match(cmd)
             if m:
                 return self._click_boton(int(m.group(1)), int(m.group(2)), captura, "right")
+
+            m = _RE_DRAG.match(cmd)
+            if m:
+                return self._drag(int(m.group(1)), int(m.group(2)),
+                                  int(m.group(3)), int(m.group(4)), captura)
 
             m = _RE_TYPE.match(cmd)
             if m:
@@ -415,6 +422,26 @@ class Controller:
             return False
         pyautogui.click(button=boton)
         logger.info("%s_click en real(%d,%d) [img(%d,%d)].", boton, x, y, x_img, y_img)
+        return True
+
+    def _drag(self, x1_img: int, y1_img: int, x2_img: int, y2_img: int,
+              cap: Optional[Captura]) -> bool:
+        """Arrastra de (X1,Y1) a (X2,Y2) en espacio IMAGEN. Acción compuesta
+        PERMITIDA (moveTo verificado al inicio + dragTo al destino). Corner-check
+        en AMBOS extremos (FIX 1)."""
+        x1, y1 = (cap.real(x1_img, y1_img) if cap else (x1_img, y1_img))
+        x2, y2 = (cap.real(x2_img, y2_img) if cap else (x2_img, y2_img))
+        if self._en_zona_esquina(x1, y1) or self._en_zona_esquina(x2, y2):
+            logger.warning("Controller: coordenadas en zona prohibida (esquina), modelo "
+                           "debe recalcular — drag real(%d,%d)->(%d,%d).", x1, y1, x2, y2)
+            return False
+        if self.simulacion:
+            logger.info("[SIM] drag real(%d,%d) -> (%d,%d)", x1, y1, x2, y2)
+            return True
+        if not self._mover_verificado(x1, y1, "drag-inicio"):
+            return False
+        pyautogui.dragTo(x2, y2, duration=_DUR_MOV)
+        logger.info("drag real(%d,%d) -> (%d,%d).", x1, y1, x2, y2)
         return True
 
     def _tamano_pantalla(self) -> Optional[tuple[int, int]]:
