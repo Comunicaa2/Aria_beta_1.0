@@ -11,6 +11,7 @@ Comandos válidos (uno por turno):
     key TECLA           pulsa una tecla       (key enter / key esc / key tab)
     hotkey A+B[+C]      combinación           (hotkey ctrl+c / hotkey ctrl+s)
     launch_app NOMBRE   lanza una app por nombre (launch_app notepad / calc / msedge)
+    find_text "T"       OCR: localiza el texto T y reporta sus coords (no clica)
     wait N              espera N segundos
     done                señala tarea completada (no toca el SO)
 
@@ -110,6 +111,7 @@ _RE_KEY          = re.compile(r"^key\s+(\S+)\s*$",                       re.I)
 _RE_HOTKEY       = re.compile(r"^hotkey\s+([\w]+(?:\+[\w]+)*)\s*$",      re.I)
 _RE_WAIT         = re.compile(r"^wait\s+(\d+(?:\.\d+)?)\s*$",            re.I)
 _RE_LAUNCH       = re.compile(r"^launch_app\s+(.+?)\s*$",                re.I)
+_RE_FIND_TEXT    = re.compile(r'^find_text\s+["\']?(.+?)["\']?\s*$',     re.I)
 # scroll up/down [N] — N opcional (por defecto _SCROLL_DEF). Acepta arriba/abajo.
 _RE_SCROLL       = re.compile(r"^scroll\s+(up|down|arriba|abajo)(?:\s+(\d+))?\s*$", re.I)
 _RE_DONE         = re.compile(r"^done\s*$",                              re.I)
@@ -129,6 +131,7 @@ class Controller:
         return self._ultimo_done
 
     _ultimo_done = False
+    ultimo_detalle = ""   # detalle de la última acción (p. ej. coords de find_text/find_image)
 
     # ── API pública ────────────────────────────────────────────────────────────
     def ejecutar(self, accion: str, captura: Optional[Captura] = None) -> bool:
@@ -138,6 +141,7 @@ class Controller:
         correctamente, False si el comando es inválido o falló.
         """
         self._ultimo_done = False
+        self.ultimo_detalle = ""
         cmd = (accion or "").strip()
         if not cmd:
             logger.warning("Controller: acción vacía.")
@@ -153,6 +157,10 @@ class Controller:
             m = _RE_LAUNCH.match(cmd)
             if m:
                 return self._launch_app(m.group(1))
+
+            m = _RE_FIND_TEXT.match(cmd)
+            if m:
+                return self._find_text(m.group(1), captura)
 
             m = _RE_CLICK.match(cmd)
             if m:
@@ -216,6 +224,72 @@ class Controller:
             return False
         logger.info("launch_app '%s'.", nombre)
         return True
+
+    def _find_text(self, objetivo: str, cap: Optional[Captura]) -> bool:
+        """OCR sobre la imagen que ve el modelo (cap.b64). Si encuentra `objetivo`
+        (case-insensitive), reporta sus coords en ESPACIO IMAGEN vía ultimo_detalle
+        para que el modelo haga 'click X Y'. NO clica ni mueve el ratón (lectura
+        pura). Degrada limpio si Tesseract no está instalado."""
+        objetivo = objetivo.strip().strip('"').strip("'")
+        if not objetivo:
+            return False
+        if cap is None or not cap.b64:
+            self.ultimo_detalle = "find_text: sin captura para analizar"
+            return False
+        try:
+            import base64, io
+            from PIL import Image
+            import pytesseract
+            from pytesseract import Output
+        except ImportError as exc:
+            logger.warning("find_text: OCR no disponible (%s).", exc)
+            self.ultimo_detalle = "find_text: OCR no instalado"
+            return False
+        try:
+            img = Image.open(io.BytesIO(base64.b64decode(cap.b64)))
+            datos = pytesseract.image_to_data(img, output_type=Output.DICT)
+        except pytesseract.TesseractNotFoundError:
+            logger.warning("find_text: binario Tesseract no encontrado en PATH.")
+            self.ultimo_detalle = "find_text: Tesseract no instalado"
+            return False
+        except Exception as exc:                   # noqa: BLE001
+            logger.warning("find_text: fallo OCR — %s", exc)
+            self.ultimo_detalle = "find_text: fallo OCR"
+            return False
+
+        obj = objetivo.lower()
+        n = len(datos["text"])
+        # 1) palabra única que contiene el objetivo
+        for i in range(n):
+            palabra = (datos["text"][i] or "").strip()
+            if palabra and obj in palabra.lower():
+                cx = datos["left"][i] + datos["width"][i] // 2
+                cy = datos["top"][i] + datos["height"][i] // 2
+                self.ultimo_detalle = (f"texto '{objetivo}' encontrado en "
+                                       f"({cx},{cy}) — usa click {cx} {cy}")
+                logger.info("find_text: '%s' en img(%d,%d).", objetivo, cx, cy)
+                return True
+        # 2) objetivo multi-palabra: agrupar por línea y unir cajas
+        lineas: dict = {}
+        for i in range(n):
+            if (datos["text"][i] or "").strip():
+                clave = (datos["block_num"][i], datos["par_num"][i], datos["line_num"][i])
+                lineas.setdefault(clave, []).append(i)
+        for idxs in lineas.values():
+            texto_linea = " ".join((datos["text"][i] or "").strip() for i in idxs)
+            if obj in texto_linea.lower():
+                x0 = min(datos["left"][i] for i in idxs)
+                y0 = min(datos["top"][i] for i in idxs)
+                x1 = max(datos["left"][i] + datos["width"][i] for i in idxs)
+                y1 = max(datos["top"][i] + datos["height"][i] for i in idxs)
+                cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+                self.ultimo_detalle = (f"texto '{objetivo}' encontrado en "
+                                       f"({cx},{cy}) — usa click {cx} {cy}")
+                logger.info("find_text: '%s' (línea) en img(%d,%d).", objetivo, cx, cy)
+                return True
+        self.ultimo_detalle = f"texto '{objetivo}' no encontrado en pantalla"
+        logger.info("find_text: '%s' no encontrado.", objetivo)
+        return False
 
     # ── Mouse ───────────────────────────────────────────────────────────────────
     def _click(self, x_img: int, y_img: int, cap: Optional[Captura], doble: bool) -> bool:

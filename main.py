@@ -178,6 +178,9 @@ class Aria:
                     logger.info("Tarea declarada COMPLETA por el modelo (ciclo %d).", ciclo)
                     return COMPLETADO
 
+                # Detalle opcional del controller (p. ej. coords que reportó find_text).
+                detalle = (f" {self.controller.ultimo_detalle}."
+                           if self.controller.ultimo_detalle else "")
                 if ok:
                     fallos_seguidos = 0
                     # Atribuye la acción ejecutada al modelo que la produjo.
@@ -186,13 +189,14 @@ class Aria:
                     )
                     image.esperar_estabilidad(max_seg=DELAY_ESTABILIDAD + 1.5)
                     self.cerebro.registrar_resultado(
-                        f"Sistema: acción '{decision.accion}' ejecutada. Evalúa la nueva captura."
+                        f"Sistema: acción '{decision.accion}' ejecutada.{detalle} "
+                        "Evalúa la nueva captura."
                     )
                 else:
                     fallos_seguidos += 1
                     self.stats["fallos"] += 1
                     self.cerebro.registrar_resultado(
-                        f"Sistema: la acción '{decision.accion}' falló o no es válida. Prueba otra."
+                        f"Sistema: la acción '{decision.accion}' falló o no es válida.{detalle} Prueba otra."
                     )
 
             logger.info("Se alcanzó el tope de %d ciclos.", MAX_PASOS_TAREA)
