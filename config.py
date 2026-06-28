@@ -72,7 +72,7 @@ NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 NVIDIA_MODEL_PRIMARIO   = os.getenv("ARIA_NVIDIA_MODEL",
                                     "meta/llama-3.2-90b-vision-instruct")
 NVIDIA_MODEL_SECUNDARIO = os.getenv("ARIA_NVIDIA_MODEL_2",
-                                    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
+                                    "minimaxai/minimax-m3")
 NVIDIA_FALLBACK_MODELS  = [NVIDIA_MODEL_PRIMARIO, NVIDIA_MODEL_SECUNDARIO]
 
 # ─── Generación del modelo ────────────────────────────────────────────────────
