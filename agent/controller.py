@@ -290,6 +290,11 @@ class Controller:
             logger.warning("find_text: OCR no disponible (%s).", exc)
             self.ultimo_detalle = "find_text: OCR no instalado"
             return False
+        # Si TESSERACT_CMD apunta a un exe existente, úsalo (cuando tesseract no
+        # está en el PATH del proceso). Robusto entre máquinas; lo carga el .env.
+        cmd = os.getenv("TESSERACT_CMD", "").strip()
+        if cmd and os.path.isfile(cmd):
+            pytesseract.pytesseract.tesseract_cmd = cmd
         try:
             img = Image.open(io.BytesIO(base64.b64decode(cap.b64)))
             datos = pytesseract.image_to_data(img, output_type=Output.DICT)
