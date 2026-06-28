@@ -54,7 +54,7 @@ logger = logging.getLogger("aria.brain")
 # panel del Entrenador). Sus valores deben coincidir con trainer/protocolo.py.
 MODELO_GEMINI    = "GEMINI"
 MODELO_NIM_LLAMA = "NIM-LLAMA"   # meta/llama-3.2-90b-vision-instruct
-MODELO_NIM_OMNI  = "NIM-OMNI"    # nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+MODELO_NIM_OMNI  = "NIM-MINIMAX"  # minimaxai/minimax-m3
 
 
 def _etiqueta_nim(modelo: str) -> str:
@@ -228,7 +228,7 @@ class Decision:
     pensamiento: str
     accion: str
     raw: str = ""
-    modelo: str = MODELO_GEMINI   # qué modelo la produjo (GEMINI / NIM-LLAMA / NIM-OMNI)
+    modelo: str = MODELO_GEMINI   # qué modelo la produjo (GEMINI / NIM-LLAMA / NIM-MINIMAX)
 
     @property
     def valida(self) -> bool:
@@ -369,7 +369,7 @@ class Cerebro:
             write=TIMEOUT_WRITE, pool=TIMEOUT_POOL,
         )
         self._cliente = httpx.Client(timeout=self._timeout)
-        # Modelo que respondió la última llamada (GEMINI / NIM-LLAMA / NIM-OMNI).
+        # Modelo que respondió la última llamada (GEMINI / NIM-LLAMA / NIM-MINIMAX).
         self.ultimo_modelo = MODELO_GEMINI
         # Modelo NIM concreto usado en el último fallback (para logs/diagnóstico).
         self.ultimo_nim = ""
@@ -562,7 +562,7 @@ class Cerebro:
         Llama a un modelo de NVIDIA NIM (chat/completions estilo OpenAI) con un
         system prompt de formato estricto + el historial. Devuelve el texto YA
         AISLADO al bloque PENSAMIENTO/ACCION/FIN (limpieza agresiva), o "" si falla.
-        Sirve tanto para el multimodal no-razonador como para el razonador omni.
+        Sirve tanto para el multimodal (Llama) como para el segundo modelo (MiniMax M3).
         """
         mensajes = self._a_openai(self._gc_imagenes(), self._nim_sys)
         payload = {

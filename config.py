@@ -67,7 +67,7 @@ NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 # Cadena de fallback NIM, probada EN ORDEN tras un 429 de Gemini:
 #   1º un multimodal NO razonador (responde directo en formato, rápido y limpio).
-#   2º el razonador omni como último recurso (más lento e inconsistente).
+#   2º MiniMax M3 (minimaxai/minimax-m3) como último recurso.
 # Verificado disponible y consistente: meta/llama-3.2-90b-vision-instruct (4/4).
 NVIDIA_MODEL_PRIMARIO   = os.getenv("ARIA_NVIDIA_MODEL",
                                     "meta/llama-3.2-90b-vision-instruct")
