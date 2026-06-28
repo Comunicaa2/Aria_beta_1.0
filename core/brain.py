@@ -24,6 +24,7 @@ from typing import Optional
 
 import httpx
 
+from core import lecciones
 from config import (
     AGENT_NAME,
     GEMINI_API_KEY,
@@ -372,6 +373,13 @@ class Cerebro:
         self.ultimo_modelo = MODELO_GEMINI
         # Modelo NIM concreto usado en el último fallback (para logs/diagnóstico).
         self.ultimo_nim = ""
+        # Memoria persistente: inyecta las lecciones de sesiones anteriores en el
+        # system prompt una sola vez al iniciar (Gemini no aprende entre sesiones).
+        seccion = lecciones.seccion_prompt()
+        self._sys = SYSTEM_INSTRUCTION + seccion
+        self._nim_sys = NIM_SYSTEM_INSTRUCTION + seccion
+        if seccion:
+            logger.info("Lecciones cargadas en el prompt (%d).", len(lecciones.cargar()))
         # El rate limiter ahora es CROSS-PROCESS (módulo, archivo compartido).
         logger.info("Cerebro iniciado — modelo: %s.", GEMINI_MODEL)
 
@@ -510,7 +518,7 @@ class Cerebro:
         max_tokens = GEN_MAX_TOKENS + (THINK_RESPUESTA_EXTRA + budget if budget else 0)
 
         payload = {
-            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+            "systemInstruction": {"parts": [{"text": self._sys}]},
             "contents": self._gc_imagenes(),
             "generationConfig": {
                 "temperature": GEN_TEMPERATURE,
@@ -556,7 +564,7 @@ class Cerebro:
         AISLADO al bloque PENSAMIENTO/ACCION/FIN (limpieza agresiva), o "" si falla.
         Sirve tanto para el multimodal no-razonador como para el razonador omni.
         """
-        mensajes = self._a_openai(self._gc_imagenes(), NIM_SYSTEM_INSTRUCTION)
+        mensajes = self._a_openai(self._gc_imagenes(), self._nim_sys)
         payload = {
             "model": modelo,
             "messages": mensajes,
