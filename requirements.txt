@@ -8,3 +8,4 @@ psutil>=5.9.0           # telemetría de CPU/RAM/temperatura
 websocket-client>=1.7.0 # avatar VTuber (opcional)
 pytesseract>=0.3.10     # OCR (find_text) — requiere el binario Tesseract instalado en el SO
 opencv-python>=4.8.0    # find_image (locateCenterOnScreen con confidence)
+pygetwindow>=0.0.9      # focus_window (traer ventana al frente por título)

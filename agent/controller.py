@@ -13,6 +13,7 @@ Comandos válidos (uno por turno):
     launch_app NOMBRE   lanza una app por nombre (launch_app notepad / calc / msedge)
     find_text "T"       OCR: localiza el texto T y reporta sus coords (no clica)
     find_image RUTA     localiza un PNG en pantalla y reporta sus coords (no clica)
+    focus_window "T"    trae al frente la ventana cuyo título contiene T
     wait N              espera N segundos
     done                señala tarea completada (no toca el SO)
 
@@ -114,6 +115,7 @@ _RE_WAIT         = re.compile(r"^wait\s+(\d+(?:\.\d+)?)\s*$",            re.I)
 _RE_LAUNCH       = re.compile(r"^launch_app\s+(.+?)\s*$",                re.I)
 _RE_FIND_TEXT    = re.compile(r'^find_text\s+["\']?(.+?)["\']?\s*$',     re.I)
 _RE_FIND_IMAGE   = re.compile(r'^find_image\s+["\']?(.+?)["\']?\s*$',    re.I)
+_RE_FOCUS_WIN    = re.compile(r'^focus_window\s+["\']?(.+?)["\']?\s*$',  re.I)
 # scroll up/down [N] — N opcional (por defecto _SCROLL_DEF). Acepta arriba/abajo.
 _RE_SCROLL       = re.compile(r"^scroll\s+(up|down|arriba|abajo)(?:\s+(\d+))?\s*$", re.I)
 _RE_DONE         = re.compile(r"^done\s*$",                              re.I)
@@ -167,6 +169,10 @@ class Controller:
             m = _RE_FIND_IMAGE.match(cmd)
             if m:
                 return self._find_image(m.group(1), captura)
+
+            m = _RE_FOCUS_WIN.match(cmd)
+            if m:
+                return self._focus_window(m.group(1))
 
             m = _RE_CLICK.match(cmd)
             if m:
@@ -330,6 +336,43 @@ class Controller:
                                f"({x_img},{y_img}) — usa click {x_img} {y_img}")
         logger.info("find_image: '%s' en img(%d,%d) [real(%d,%d)].",
                     ruta, x_img, y_img, x_real, y_real)
+        return True
+
+    def _focus_window(self, titulo: str) -> bool:
+        """Trae al frente la ventana cuyo título CONTIENE `titulo` (case-insensitive).
+        Si está minimizada, la restaura. Best-effort: en Windows el 'foreground lock'
+        puede impedir el cambio; el modelo lo verifica en la siguiente captura."""
+        titulo = titulo.strip().strip('"').strip("'")
+        if not titulo:
+            return False
+        if self.simulacion:
+            logger.info("[SIM] focus_window('%s')", titulo)
+            return True
+        try:
+            import pygetwindow as gw
+        except ImportError as exc:
+            logger.warning("focus_window: pygetwindow no disponible (%s).", exc)
+            return False
+        try:
+            objetivo = titulo.lower()
+            coincidentes = [w for w in gw.getAllWindows()
+                            if w.title and objetivo in w.title.lower()]
+        except Exception as exc:                   # noqa: BLE001
+            logger.warning("focus_window: fallo buscando '%s' — %s", titulo, exc)
+            return False
+        if not coincidentes:
+            self.ultimo_detalle = f"focus_window: ventana '{titulo}' no encontrada"
+            logger.info("focus_window: '%s' no encontrada.", titulo)
+            return False
+        win = coincidentes[0]
+        try:
+            if win.isMinimized:
+                win.restore()
+            win.activate()
+        except Exception as exc:                   # pygetwindow lanza incluso en éxito
+            logger.info("focus_window: activate('%s') best-effort (%s).",
+                        win.title, type(exc).__name__)
+        logger.info("focus_window '%s'.", win.title)
         return True
 
     # ── Mouse ───────────────────────────────────────────────────────────────────
