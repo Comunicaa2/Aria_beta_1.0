@@ -8,7 +8,8 @@ Comandos válidos (uno por turno):
     double_click X Y    doble clic en (X, Y) del espacio IMAGEN
     type TEXTO          escribe el texto exacto
     key TECLA           pulsa una tecla       (key enter / key esc / key tab)
-    hotkey A+B[+C]      combinación           (hotkey win+r / hotkey ctrl+c)
+    hotkey A+B[+C]      combinación           (hotkey ctrl+c / hotkey ctrl+s)
+    launch_app NOMBRE   lanza una app por nombre (launch_app notepad / calc / msedge)
     wait N              espera N segundos
     done                señala tarea completada (no toca el SO)
 
@@ -20,6 +21,7 @@ SIMULACIÓN (registra la acción pero no la ejecuta) y nunca lanza hacia arriba.
 """
 
 import logging
+import os
 import re
 import time
 from typing import Optional
@@ -105,6 +107,7 @@ _RE_KEY          = re.compile(r"^key\s+(\S+)\s*$",                       re.I)
 # Acepta combinación (win+r) y tecla única (win) — el modelo a veces usa una sola.
 _RE_HOTKEY       = re.compile(r"^hotkey\s+([\w]+(?:\+[\w]+)*)\s*$",      re.I)
 _RE_WAIT         = re.compile(r"^wait\s+(\d+(?:\.\d+)?)\s*$",            re.I)
+_RE_LAUNCH       = re.compile(r"^launch_app\s+(.+?)\s*$",                re.I)
 # scroll up/down [N] — N opcional (por defecto _SCROLL_DEF). Acepta arriba/abajo.
 _RE_SCROLL       = re.compile(r"^scroll\s+(up|down|arriba|abajo)(?:\s+(\d+))?\s*$", re.I)
 _RE_DONE         = re.compile(r"^done\s*$",                              re.I)
@@ -145,6 +148,10 @@ class Controller:
                 logger.info("Controller: 'done' — tarea señalada como completa.")
                 return True
 
+            m = _RE_LAUNCH.match(cmd)
+            if m:
+                return self._launch_app(m.group(1))
+
             m = _RE_CLICK.match(cmd)
             if m:
                 return self._click(int(m.group(1)), int(m.group(2)), captura, doble=False)
@@ -184,6 +191,25 @@ class Controller:
 
         logger.warning("Controller: comando no reconocido → '%s'", cmd[:80])
         return False
+
+    # ── Apps ────────────────────────────────────────────────────────────────────
+    def _launch_app(self, nombre: str) -> bool:
+        """Lanza una app por nombre vía ShellExecute (os.startfile): resuelve los
+        App Paths de Windows (notepad, calc, mspaint, explorer, msedge, chrome…).
+        UNA acción atómica, sin simular win+r. Falla limpia si no se resuelve."""
+        nombre = nombre.strip().strip('"').strip("'")
+        if not nombre:
+            return False
+        if self.simulacion:
+            logger.info("[SIM] launch_app('%s')", nombre)
+            return True
+        try:
+            os.startfile(nombre)               # noqa: S606 (Windows ShellExecute)
+        except (OSError, ValueError, AttributeError) as exc:
+            logger.warning("launch_app: no se pudo lanzar '%s' — %s", nombre, exc)
+            return False
+        logger.info("launch_app '%s'.", nombre)
+        return True
 
     # ── Mouse ───────────────────────────────────────────────────────────────────
     def _click(self, x_img: int, y_img: int, cap: Optional[Captura], doble: bool) -> bool:
