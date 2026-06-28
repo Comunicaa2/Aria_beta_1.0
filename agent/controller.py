@@ -14,6 +14,8 @@ Comandos válidos (uno por turno):
     type TEXTO          escribe el texto exacto
     key TECLA           pulsa una tecla       (key enter / key esc / key tab)
     hotkey A+B[+C]      combinación           (hotkey ctrl+c / hotkey ctrl+s)
+    hold_key MOD+click X Y  mantén MOD (shift/ctrl/alt) y clic en (X,Y) (multi-selección)
+    hold_key MOD+key T      mantén MOD y pulsa la tecla T
     launch_app NOMBRE   lanza una app por nombre (launch_app notepad / calc / msedge)
     find_text "T"       OCR: localiza el texto T y reporta sus coords (no clica)
     find_image RUTA     localiza un PNG en pantalla y reporta sus coords (no clica)
@@ -115,6 +117,7 @@ _RE_DRAG         = re.compile(r"^drag\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*
 _RE_MIDDLE_CLICK = re.compile(r"^middle_click\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
 _RE_HOVER        = re.compile(r"^hover\s+(-?\d+)\s+(-?\d+)\s*$",        re.I)
 _RE_HSCROLL      = re.compile(r"^hscroll\s+(left|right|izquierda|derecha)(?:\s+(\d+))?\s*$", re.I)
+_RE_HOLD_KEY     = re.compile(r"^hold_key\s+(.+?)\+(click|key)\s+(.+?)\s*$", re.I)
 _RE_TYPE         = re.compile(r"^type\s+(.+)$",                          re.I | re.S)
 _RE_KEY          = re.compile(r"^key\s+(\S+)\s*$",                       re.I)
 # Acepta combinación (win+r) y tecla única (win) — el modelo a veces usa una sola.
@@ -211,6 +214,10 @@ class Controller:
             if m:
                 teclas = [t.strip() for t in m.group(1).split("+") if t.strip()]
                 return self._hotkey(teclas)
+
+            m = _RE_HOLD_KEY.match(cmd)
+            if m:
+                return self._hold_key(m.group(1), m.group(2).lower(), m.group(3), captura)
 
             m = _RE_SCROLL.match(cmd)
             if m:
@@ -579,6 +586,61 @@ class Controller:
         if settle:
             time.sleep(settle)
         logger.info("hotkey %s.", "+".join(norm))
+        return True
+
+    def _hold_key(self, mods_str: str, accion: str, arg: str,
+                  cap: Optional[Captura]) -> bool:
+        """Mantén uno o más MODIFICADORES (shift/ctrl/alt/win) mientras se hace UNA
+        acción: click X Y o key T. Excepción consciente al 'no macros' usando el
+        idiom nativo pyautogui.hold(). El form +key se valida contra la lista negra
+        (evita bypass tipo alt+key f4). Corner-check en el form +click."""
+        permitidos = {"shift", "ctrl", "alt", "win"}
+        mods = [_ALIAS_TECLAS.get(t.strip().lower(), t.strip().lower())
+                for t in mods_str.split("+") if t.strip()]
+        if not mods or any(m not in permitidos for m in mods):
+            logger.warning("hold_key: modificadores inválidos %s (usa shift/ctrl/alt/win).", mods)
+            return False
+
+        if accion == "click":
+            partes = arg.split()
+            if len(partes) != 2:
+                return False
+            try:
+                x_img, y_img = int(partes[0]), int(partes[1])
+            except ValueError:
+                return False
+            x, y = (cap.real(x_img, y_img) if cap else (x_img, y_img))
+            if self._en_zona_esquina(x, y):
+                logger.warning("Controller: coordenadas en zona prohibida (esquina), modelo "
+                               "debe recalcular — hold_key %s+click real(%d,%d).",
+                               "+".join(mods), x, y)
+                return False
+            if self.simulacion:
+                logger.info("[SIM] hold_key %s+click img(%d,%d) → real(%d,%d)",
+                            "+".join(mods), x_img, y_img, x, y)
+                return True
+            if not self._mover_verificado(x, y, "hold_click"):
+                return False
+            with pyautogui.hold(mods):
+                pyautogui.click()
+            logger.info("hold_key %s+click en real(%d,%d).", "+".join(mods), x, y)
+            return True
+
+        # accion == "key"
+        tecla = arg.strip().split()[0].lower() if arg.strip() else ""
+        if not tecla:
+            return False
+        tecla = _ALIAS_TECLAS.get(tecla, tecla)
+        if _es_hotkey_prohibida(mods + [tecla]):
+            logger.warning("hold_key: combinación prohibida bloqueada: %s+%s",
+                           "+".join(mods), tecla)
+            return False
+        if self.simulacion:
+            logger.info("[SIM] hold_key %s+key %s", "+".join(mods), tecla)
+            return True
+        with pyautogui.hold(mods):
+            pyautogui.press(tecla)
+        logger.info("hold_key %s+key %s.", "+".join(mods), tecla)
         return True
 
     def _wait(self, segundos: float) -> bool:
