@@ -12,6 +12,7 @@ Comandos válidos (uno por turno):
     hotkey A+B[+C]      combinación           (hotkey ctrl+c / hotkey ctrl+s)
     launch_app NOMBRE   lanza una app por nombre (launch_app notepad / calc / msedge)
     find_text "T"       OCR: localiza el texto T y reporta sus coords (no clica)
+    find_image RUTA     localiza un PNG en pantalla y reporta sus coords (no clica)
     wait N              espera N segundos
     done                señala tarea completada (no toca el SO)
 
@@ -112,6 +113,7 @@ _RE_HOTKEY       = re.compile(r"^hotkey\s+([\w]+(?:\+[\w]+)*)\s*$",      re.I)
 _RE_WAIT         = re.compile(r"^wait\s+(\d+(?:\.\d+)?)\s*$",            re.I)
 _RE_LAUNCH       = re.compile(r"^launch_app\s+(.+?)\s*$",                re.I)
 _RE_FIND_TEXT    = re.compile(r'^find_text\s+["\']?(.+?)["\']?\s*$',     re.I)
+_RE_FIND_IMAGE   = re.compile(r'^find_image\s+["\']?(.+?)["\']?\s*$',    re.I)
 # scroll up/down [N] — N opcional (por defecto _SCROLL_DEF). Acepta arriba/abajo.
 _RE_SCROLL       = re.compile(r"^scroll\s+(up|down|arriba|abajo)(?:\s+(\d+))?\s*$", re.I)
 _RE_DONE         = re.compile(r"^done\s*$",                              re.I)
@@ -161,6 +163,10 @@ class Controller:
             m = _RE_FIND_TEXT.match(cmd)
             if m:
                 return self._find_text(m.group(1), captura)
+
+            m = _RE_FIND_IMAGE.match(cmd)
+            if m:
+                return self._find_image(m.group(1), captura)
 
             m = _RE_CLICK.match(cmd)
             if m:
@@ -290,6 +296,41 @@ class Controller:
         self.ultimo_detalle = f"texto '{objetivo}' no encontrado en pantalla"
         logger.info("find_text: '%s' no encontrado.", objetivo)
         return False
+
+    def _find_image(self, ruta: str, cap: Optional[Captura]) -> bool:
+        """Localiza una plantilla PNG en pantalla (pyautogui.locateCenterOnScreen,
+        confidence 0.8 vía OpenCV). locate da coords REALES → se convierten a
+        ESPACIO IMAGEN (inverso de cap.real) y se reportan vía ultimo_detalle para
+        que el modelo haga 'click X Y'. NO clica (lectura pura). Falla limpia."""
+        ruta = ruta.strip().strip('"').strip("'")
+        if not ruta:
+            return False
+        if not os.path.isfile(ruta):
+            self.ultimo_detalle = f"find_image: archivo no encontrado '{ruta}'"
+            logger.warning("find_image: no existe el archivo '%s'.", ruta)
+            return False
+        if pyautogui is None:
+            self.ultimo_detalle = "find_image: pyautogui no disponible"
+            return False
+        try:
+            centro = pyautogui.locateCenterOnScreen(ruta, confidence=0.8)
+        except Exception as exc:                   # ImageNotFound / OSError / cv2
+            logger.info("find_image: '%s' no localizada (%s).", ruta, type(exc).__name__)
+            centro = None
+        if centro is None:
+            self.ultimo_detalle = f"imagen '{os.path.basename(ruta)}' no encontrada en pantalla"
+            return False
+        x_real, y_real = int(centro[0]), int(centro[1])
+        if cap is not None and cap.ancho_img and cap.alto_img:
+            x_img = int(round(x_real / cap.escala_x))
+            y_img = int(round(y_real / cap.escala_y))
+        else:
+            x_img, y_img = x_real, y_real          # sin captura: no se puede reescalar
+        self.ultimo_detalle = (f"imagen '{os.path.basename(ruta)}' encontrada en "
+                               f"({x_img},{y_img}) — usa click {x_img} {y_img}")
+        logger.info("find_image: '%s' en img(%d,%d) [real(%d,%d)].",
+                    ruta, x_img, y_img, x_real, y_real)
+        return True
 
     # ── Mouse ───────────────────────────────────────────────────────────────────
     def _click(self, x_img: int, y_img: int, cap: Optional[Captura], doble: bool) -> bool:
