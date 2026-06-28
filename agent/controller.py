@@ -65,6 +65,38 @@ _COMBOS_DIALOGO = {
     frozenset({"win"}):      0.4,    # menú Inicio
 }
 
+# ─── Lista negra de hotkeys (seguridad) ───────────────────────────────────────
+# Combinaciones que cierran/secuestran el sistema o rompen la visión de Aria. Se
+# bloquean ANTES de ejecutarse. Normalizadas: el orden de teclas y las mayúsculas
+# NO importan. Para editar, añade/quita un frozenset aquí (único lugar).
+_HOTKEYS_PROHIBIDAS = frozenset({
+    frozenset({"alt", "f4"}),            # cierra la ventana activa
+    frozenset({"win", "l"}),             # bloquea la sesión
+    frozenset({"win", "d"}),             # muestra escritorio (minimiza todo)
+    frozenset({"win", "r"}),             # Ejecutar (usa launch_app en su lugar)
+    frozenset({"win", "alt", "r"}),      # grabadora de pantalla
+    frozenset({"win", "g"}),             # Xbox Game Bar
+    frozenset({"ctrl", "alt", "del"}),   # pantalla de seguridad
+    frozenset({"win", "x"}),             # menú de usuario avanzado
+    frozenset({"alt", "tab"}),           # cambiador de ventanas
+    frozenset({"win", "tab"}),           # vista de tareas
+    frozenset({"ctrl", "w"}),            # cierra pestaña/ventana (pierde trabajo)
+    frozenset({"ctrl", "shift", "esc"}), # Administrador de tareas
+    frozenset({"f11"}),                  # pantalla completa (rompe la visión)
+})
+
+# Alias → nombre canónico pyautogui, para que la lista negra sea robusta a variantes.
+_ALIAS_TECLAS = {
+    "control": "ctrl", "windows": "win", "super": "win", "cmd": "win",
+    "escape": "esc", "delete": "del", "supr": "del",
+}
+
+
+def _es_hotkey_prohibida(norm: list[str]) -> bool:
+    """True si la combinación (normalizada por alias) está en la lista negra."""
+    combo = frozenset(_ALIAS_TECLAS.get(t, t) for t in norm)
+    return combo in _HOTKEYS_PROHIBIDAS
+
 # ─── Patrones de comandos ─────────────────────────────────────────────────────
 _RE_CLICK        = re.compile(r"^click\s+(-?\d+)\s+(-?\d+)\s*$",        re.I)
 _RE_DOUBLE_CLICK = re.compile(r"^double_click\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
@@ -250,6 +282,9 @@ class Controller:
         if not teclas:
             return False
         norm = [t.lower() for t in teclas]
+        if _es_hotkey_prohibida(norm):
+            logger.warning("hotkey prohibida bloqueada: %s", "+".join(norm))
+            return False
         if self.simulacion:
             logger.info("[SIM] hotkey(%s)", "+".join(norm))
             return True
