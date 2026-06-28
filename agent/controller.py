@@ -8,6 +8,9 @@ Comandos válidos (uno por turno):
     double_click X Y    doble clic en (X, Y) del espacio IMAGEN
     right_click X Y     clic derecho en (X, Y) (menú contextual)
     drag X1 Y1 X2 Y2    arrastra desde (X1,Y1) hasta (X2,Y2) (mover/seleccionar)
+    middle_click X Y    clic central en (X, Y)
+    hover X Y           mueve el cursor a (X, Y) sin clicar (menús al pasar)
+    hscroll DIR N       scroll horizontal N clics (hscroll right 5 / hscroll left 3)
     type TEXTO          escribe el texto exacto
     key TECLA           pulsa una tecla       (key enter / key esc / key tab)
     hotkey A+B[+C]      combinación           (hotkey ctrl+c / hotkey ctrl+s)
@@ -109,6 +112,9 @@ _RE_CLICK        = re.compile(r"^click\s+(-?\d+)\s+(-?\d+)\s*$",        re.I)
 _RE_DOUBLE_CLICK = re.compile(r"^double_click\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
 _RE_RIGHT_CLICK  = re.compile(r"^right_click\s+(-?\d+)\s+(-?\d+)\s*$",   re.I)
 _RE_DRAG         = re.compile(r"^drag\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
+_RE_MIDDLE_CLICK = re.compile(r"^middle_click\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
+_RE_HOVER        = re.compile(r"^hover\s+(-?\d+)\s+(-?\d+)\s*$",        re.I)
+_RE_HSCROLL      = re.compile(r"^hscroll\s+(left|right|izquierda|derecha)(?:\s+(\d+))?\s*$", re.I)
 _RE_TYPE         = re.compile(r"^type\s+(.+)$",                          re.I | re.S)
 _RE_KEY          = re.compile(r"^key\s+(\S+)\s*$",                       re.I)
 # Acepta combinación (win+r) y tecla única (win) — el modelo a veces usa una sola.
@@ -210,6 +216,19 @@ class Controller:
             if m:
                 n = int(m.group(2)) if m.group(2) else _SCROLL_DEF
                 return self._scroll(m.group(1), n)
+
+            m = _RE_MIDDLE_CLICK.match(cmd)
+            if m:
+                return self._click_boton(int(m.group(1)), int(m.group(2)), captura, "middle")
+
+            m = _RE_HOVER.match(cmd)
+            if m:
+                return self._hover(int(m.group(1)), int(m.group(2)), captura)
+
+            m = _RE_HSCROLL.match(cmd)
+            if m:
+                n = int(m.group(2)) if m.group(2) else _SCROLL_DEF
+                return self._hscroll(m.group(1), n)
 
             m = _RE_WAIT.match(cmd)
             if m:
@@ -444,6 +463,23 @@ class Controller:
         logger.info("drag real(%d,%d) -> (%d,%d).", x1, y1, x2, y2)
         return True
 
+    def _hover(self, x_img: int, y_img: int, cap: Optional[Captura]) -> bool:
+        """Mueve el cursor a (X, Y) del espacio IMAGEN SIN clicar (menús que
+        aparecen al pasar el ratón). Corner-check (FIX 1) + movimiento verificado."""
+        x, y = (cap.real(x_img, y_img) if cap else (x_img, y_img))
+        if self._en_zona_esquina(x, y):
+            logger.warning("Controller: coordenadas en zona prohibida (esquina), modelo "
+                           "debe recalcular — hover real(%d,%d) [img(%d,%d)].",
+                           x, y, x_img, y_img)
+            return False
+        if self.simulacion:
+            logger.info("[SIM] hover img(%d,%d) → real(%d,%d)", x_img, y_img, x, y)
+            return True
+        if not self._mover_verificado(x, y, "hover"):
+            return False
+        logger.info("hover en real(%d,%d) [img(%d,%d)].", x, y, x_img, y_img)
+        return True
+
     def _tamano_pantalla(self) -> Optional[tuple[int, int]]:
         """Tamaño real de la pantalla (ancho, alto), o None si no se puede medir."""
         if pyautogui is None:
@@ -495,6 +531,19 @@ class Controller:
             return True
         pyautogui.scroll(clicks)
         logger.info("scroll %s %d (%d unidades).", direccion.lower(), n, clicks)
+        return True
+
+    def _hscroll(self, direccion: str, n: int) -> bool:
+        """Scroll HORIZONTAL de N clics. right/derecha → positivo; left/izquierda →
+        negativo. N se acota a [1, _SCROLL_MAX]. Espeja a _scroll (mismas constantes)."""
+        n = min(max(1, n), _SCROLL_MAX)
+        derecha = direccion.lower() in ("right", "derecha")
+        clicks = n * _SCROLL_PASO * (1 if derecha else -1)
+        if self.simulacion:
+            logger.info("[SIM] hscroll %s %d", direccion.lower(), n)
+            return True
+        pyautogui.hscroll(clicks)
+        logger.info("hscroll %s %d (%d unidades).", direccion.lower(), n, clicks)
         return True
 
     # ── Teclado ──────────────────────────────────────────────────────────────────
