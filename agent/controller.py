@@ -6,6 +6,7 @@ Comandos válidos (uno por turno):
 
     click X Y           clic izquierdo en (X, Y) del espacio IMAGEN
     double_click X Y    doble clic en (X, Y) del espacio IMAGEN
+    right_click X Y     clic derecho en (X, Y) (menú contextual)
     type TEXTO          escribe el texto exacto
     key TECLA           pulsa una tecla       (key enter / key esc / key tab)
     hotkey A+B[+C]      combinación           (hotkey ctrl+c / hotkey ctrl+s)
@@ -102,6 +103,7 @@ def _es_hotkey_prohibida(norm: list[str]) -> bool:
 # ─── Patrones de comandos ─────────────────────────────────────────────────────
 _RE_CLICK        = re.compile(r"^click\s+(-?\d+)\s+(-?\d+)\s*$",        re.I)
 _RE_DOUBLE_CLICK = re.compile(r"^double_click\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
+_RE_RIGHT_CLICK  = re.compile(r"^right_click\s+(-?\d+)\s+(-?\d+)\s*$",   re.I)
 _RE_TYPE         = re.compile(r"^type\s+(.+)$",                          re.I | re.S)
 _RE_KEY          = re.compile(r"^key\s+(\S+)\s*$",                       re.I)
 # Acepta combinación (win+r) y tecla única (win) — el modelo a veces usa una sola.
@@ -159,6 +161,10 @@ class Controller:
             m = _RE_DOUBLE_CLICK.match(cmd)
             if m:
                 return self._click(int(m.group(1)), int(m.group(2)), captura, doble=True)
+
+            m = _RE_RIGHT_CLICK.match(cmd)
+            if m:
+                return self._click_boton(int(m.group(1)), int(m.group(2)), captura, "right")
 
             m = _RE_TYPE.match(cmd)
             if m:
@@ -232,6 +238,25 @@ class Controller:
         else:
             pyautogui.click()
         logger.info("%s en real(%d,%d) [img(%d,%d)].", etiqueta, x, y, x_img, y_img)
+        return True
+
+    def _click_boton(self, x_img: int, y_img: int, cap: Optional[Captura], boton: str) -> bool:
+        """Clic con botón no-izquierdo ('right'/'middle') en (X, Y) del espacio
+        IMAGEN. Mismo patrón que _click: corner-check (FIX 1) + movimiento
+        verificado. No modifica _click (las 7 core quedan intactas)."""
+        x, y = (cap.real(x_img, y_img) if cap else (x_img, y_img))
+        if self._en_zona_esquina(x, y):
+            logger.warning("Controller: coordenadas en zona prohibida (esquina), modelo "
+                           "debe recalcular — %s_click real(%d,%d) [img(%d,%d)].",
+                           boton, x, y, x_img, y_img)
+            return False
+        if self.simulacion:
+            logger.info("[SIM] %s_click img(%d,%d) → real(%d,%d)", boton, x_img, y_img, x, y)
+            return True
+        if not self._mover_verificado(x, y, f"{boton}_click"):
+            return False
+        pyautogui.click(button=boton)
+        logger.info("%s_click en real(%d,%d) [img(%d,%d)].", boton, x, y, x_img, y_img)
         return True
 
     def _tamano_pantalla(self) -> Optional[tuple[int, int]]:
