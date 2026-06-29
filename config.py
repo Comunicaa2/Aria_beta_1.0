@@ -110,7 +110,8 @@ TIMEOUT_POOL    = 65.0
 
 # ─── Bucle de tarea autónoma ──────────────────────────────────────────────────
 MAX_PASOS_TAREA   = 12     # tope de ciclos visión→acción por comando (anti-bucle)
-MAX_HISTORIAL     = 8       # turnos de historial conservados (historial mínimo)
+MAX_HISTORIAL     = 12      # FIX #2: 8→12 (~4 ciclos). Las imágenes viejas ya se
+                           # podan en _gc_imagenes, así que el coste en tokens es bajo.
 DELAY_ESTABILIDAD = 1.0    # s: espera tras una acción para que Windows repinte
 
 # ─── Telemetría / estado OVERLOADED ───────────────────────────────────────────
