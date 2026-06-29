@@ -187,7 +187,12 @@ class Aria:
                     self.ultimas_acciones_modelo[decision.modelo] = (
                         self.ultimas_acciones_modelo.get(decision.modelo, 0) + 1
                     )
-                    image.esperar_estabilidad(max_seg=DELAY_ESTABILIDAD + 1.5)
+                    # FIX #1: las apps tardan en pintar → piso mayor tras launch_app.
+                    es_app = decision.accion.lower().startswith("launch_app")
+                    image.esperar_estabilidad(
+                        max_seg=DELAY_ESTABILIDAD + 1.5,
+                        min_espera=1.5 if es_app else 0.5,
+                    )
                     self.cerebro.registrar_resultado(
                         f"Sistema: acción '{decision.accion}' ejecutada.{detalle} "
                         "Evalúa la nueva captura."

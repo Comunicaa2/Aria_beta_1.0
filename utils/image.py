@@ -236,12 +236,17 @@ def esperar_estabilidad(
     intervalo: float = 0.18,
     umbral: float = 0.02,
     estables: int = 2,
+    min_espera: float = 0.5,
 ) -> bool:
     """
-    Espera adaptativa: captura miniaturas y vuelve cuando hay `estables` lecturas
+    Espera adaptativa. PRIMERO duerme `min_espera` s (piso real para que la acción
+    surta efecto antes de empezar a comparar — evita capturar el frame muerto previo
+    al cambio), LUEGO captura miniaturas y vuelve cuando hay `estables` lecturas
     seguidas con diff < `umbral` (UI quieta) o se alcanza `max_seg`. Devuelve True
-    si la pantalla se estabilizó. Sin visión → sleep corto y False.
+    si la pantalla se estabilizó. Sin visión → sleep corto y False. El piso es
+    ADITIVO: `max_seg` es la ventana de muestreo DESPUÉS del piso.
     """
+    time.sleep(max(0.0, min_espera))             # FIX #1: piso antes de comparar
     inicio = time.monotonic()
     prev = _mini()
     if prev is None:
