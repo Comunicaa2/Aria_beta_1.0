@@ -159,9 +159,10 @@ def _rate_limit_compartido() -> None:
 # (reasoning_content) que comparte presupuesto con la respuesta: necesita margen
 # amplio para no agotar el budget antes de emitir la respuesta en formato.
 _NIM_MAX_TOKENS = 2048
-# El 30B de razonamiento es lento y NIM puede tardar en el "cold start" inicial;
-# damos un timeout amplio (es un fallback de entrenamiento, no la ruta caliente).
-_NIM_TIMEOUT = 120.0
+# El timeout de UNA llamada NIM debe ser MENOR que el timeout de tarea del trainer
+# (30s congelado en NIM, FIX #3): si NIM no responde en 25s, fallamos rápido en vez
+# de bloquear la tarea hasta que el trainer la expire. (FIX #6)
+_NIM_TIMEOUT = 25.0
 # Limpia los bloques de razonamiento <think>…</think> que emiten los modelos de
 # razonamiento, dejando solo la respuesta en formato PENSAMIENTO/ACCION.
 _RE_THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
