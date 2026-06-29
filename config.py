@@ -78,7 +78,10 @@ NVIDIA_FALLBACK_MODELS  = [NVIDIA_MODEL_PRIMARIO, NVIDIA_MODEL_SECUNDARIO]
 # ─── Generación del modelo ────────────────────────────────────────────────────
 # Temperatura 0 → acción reproducible y de baja latencia. Respuestas cortas: el
 # formato PENSAMIENTO/ACCION/FIN cabe de sobra en pocos tokens.
-GEN_TEMPERATURE   = 0.0
+# Temperatura > 0 para romper bucles deterministas (FIX #11): ante una captura
+# casi idéntica, una temperatura 0 repetía la misma acción inútil. 0.2 introduce
+# variación suficiente sin perder reproducibilidad para clics/formato.
+GEN_TEMPERATURE   = 0.2
 GEN_TOP_P         = 0.9
 GEN_MAX_TOKENS    = 256            # tope de tokens VISIBLES de respuesta por turno
 GEN_STOP          = ["FIN"]        # corta la generación en el terminador del formato
