@@ -132,6 +132,23 @@ _RE_SCROLL       = re.compile(r"^scroll\s+(up|down|arriba|abajo)(?:\s+(\d+))?\s*
 _RE_DONE         = re.compile(r"^done\s*$",                              re.I)
 
 
+class _CapturaDetalle(logging.Handler):
+    """FIX #8: guarda el último WARNING/ERROR del controller en `ultimo_detalle`,
+    para que las razones de fallo (esquina, comando no reconocido, app no lanzada,
+    hotkey prohibida, movimiento abortado…) lleguen a Gemini en la nota de
+    resultado. Los éxitos loguean en INFO, así que no se capturan."""
+
+    def __init__(self, ctrl: "Controller") -> None:
+        super().__init__(level=logging.WARNING)
+        self._ctrl = ctrl
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._ctrl.ultimo_detalle = record.getMessage()
+        except Exception:                          # noqa: BLE001
+            pass
+
+
 class Controller:
     """Despachador de acciones físicas. `ejecutar()` retorna True/False."""
 
@@ -139,6 +156,11 @@ class Controller:
         self.simulacion = not _OK
         modo = "SIMULACIÓN" if self.simulacion else "REAL"
         logger.info("Controller inicializado — modo físico: %s.", modo)
+        # FIX #8: captura el último WARNING del controller en ultimo_detalle, para
+        # que las razones de fallo lleguen a Gemini. Evita duplicar el handler si
+        # se crean varios Controller (p. ej. en tests).
+        logger.handlers = [h for h in logger.handlers if not isinstance(h, _CapturaDetalle)]
+        logger.addHandler(_CapturaDetalle(self))
 
     @property
     def es_done(self) -> bool:
