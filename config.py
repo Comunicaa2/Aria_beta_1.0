@@ -99,7 +99,7 @@ THINK_RESPUESTA_EXTRA = 256
 # Con Gemini en la nube ya no hay límite de VRAM local: subimos la resolución para
 # que las coordenadas de clic sean más precisas, sin pasarnos (tokens/latencia).
 IMG_MAX_SIZE   = 1280      # lado más largo de la captura enviada al modelo (px)
-JPEG_QUALITY   = 75        # calidad JPEG al recodificar la captura
+JPEG_QUALITY   = 85        # FIX #10: 75→85, menos artefactos para leer texto/iconos
 MONITOR_INDEX  = 1         # 1 = monitor principal (mss); 0 = todos combinados
 
 # ─── Timeouts de red (segundos) ───────────────────────────────────────────────
