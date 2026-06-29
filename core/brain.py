@@ -124,6 +124,9 @@ def _rate_limit_compartido() -> None:
         pass
 
     if not _rate_lock_adquirir():                  # no se pudo coordinar → piso local
+        logger.error("Rate limit: NO se pudo adquirir el mutex en %.0fs — degradando a "
+                     "piso LOCAL; Aria y el entrenador podrían exceder %.0f RPM combinados.",
+                     _RATE_LOCK_TIMEOUT, 60.0 / GEMINI_MIN_INTERVALO)
         espera = GEMINI_MIN_INTERVALO - (time.monotonic() - _rate_ultima_local)
         if espera > 0:
             logger.info("Rate limit (local): esperando %.1fs", espera)
