@@ -91,6 +91,7 @@ def disponible() -> bool:
 
 _SW_MINIMIZE = 6
 _SW_RESTORE  = 9
+_SW_SHOWNOACTIVATE = 4   # restaura SIN activar/traer-al-frente (no tapa la app)
 
 
 def _hwnd_consola():
@@ -121,13 +122,15 @@ def minimizar_consola(settle: float = 0.18) -> bool:
 
 
 def restaurar_consola() -> bool:
-    """Restaura la consola de Aria al terminar la tarea. Resiliente."""
+    """Restaura la consola de Aria al terminar la tarea, SIN traerla al frente
+    (SW_SHOWNOACTIVATE): así no tapa la app recién abierta cuando el verificador
+    captura la pantalla. Resiliente."""
     hwnd = _hwnd_consola()
     if not hwnd:
         return False
     try:
         import ctypes
-        ctypes.windll.user32.ShowWindow(hwnd, _SW_RESTORE)
+        ctypes.windll.user32.ShowWindow(hwnd, _SW_SHOWNOACTIVATE)
         return True
     except Exception as exc:                      # noqa: BLE001
         logger.debug("restaurar_consola: fallo (%s) → no-op.", exc)
