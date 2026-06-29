@@ -226,10 +226,18 @@ class Controller:
 
             m = _RE_TYPE.match(cmd)
             if m:
+                if not self._ventana_activa_valida():
+                    logger.warning("type sin ventana activa que reciba el input "
+                                   "(foco en escritorio o consola).")
+                    return False
                 return self._type(m.group(1))
 
             m = _RE_KEY.match(cmd)
             if m:
+                if not self._ventana_activa_valida():
+                    logger.warning("key sin ventana activa que reciba el input "
+                                   "(foco en escritorio o consola).")
+                    return False
                 return self._key(m.group(1))
 
             m = _RE_HOTKEY.match(cmd)
@@ -535,6 +543,24 @@ class Controller:
         cerca_x = x <= _MARGEN_ESQUINA or x >= ancho - 1 - _MARGEN_ESQUINA
         cerca_y = y <= _MARGEN_ESQUINA or y >= alto - 1 - _MARGEN_ESQUINA
         return cerca_x and cerca_y
+
+    def _ventana_activa_valida(self) -> bool:
+        """True si hay una ventana en primer plano que pueda RECIBIR input: no 0,
+        no la consola de Aria, no el escritorio (Progman/WorkerW). Evita escribir
+        'al vacío' (FIX #9). Ante error, no bloquea (degradación segura)."""
+        try:
+            import ctypes
+            u32 = ctypes.windll.user32
+            fg = u32.GetForegroundWindow()
+            if not fg:
+                return False
+            if fg == ctypes.windll.kernel32.GetConsoleWindow():
+                return False
+            buf = ctypes.create_unicode_buffer(256)
+            u32.GetClassNameW(fg, buf, 256)
+            return buf.value not in ("Progman", "WorkerW")   # escritorio
+        except Exception:                          # noqa: BLE001
+            return True
 
     def _mover_verificado(self, x: int, y: int, etiqueta: str) -> bool:
         """Mueve VISIBLEMENTE a (x, y) y confirma con el cursor medido; re-ancla
