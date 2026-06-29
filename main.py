@@ -175,8 +175,18 @@ class Aria:
                 self.stats["acciones"] += 1
 
                 if self.controller.es_done:
-                    logger.info("Tarea declarada COMPLETA por el modelo (ciclo %d).", ciclo)
-                    return COMPLETADO
+                    # FIX #3: no aceptar 'done' a ciegas — recapturar y confirmar.
+                    cap2 = image.capturar()
+                    b64 = cap2.b64 if (cap2 and cap2.b64) else cap.b64
+                    if self.cerebro.confirmar_done(objetivo, b64):
+                        logger.info("Tarea COMPLETA confirmada (ciclo %d).", ciclo)
+                        return COMPLETADO
+                    logger.warning("'done' RECHAZADO: la tarea no se ve completa — continúo.")
+                    self.cerebro.registrar_resultado(
+                        "Sistema: declaraste 'done' pero la verificación visual dice que la "
+                        "tarea NO está completa. Sigue trabajando en ella.")
+                    fallos_seguidos += 1
+                    continue
 
                 # Detalle opcional del controller (p. ej. coords que reportó find_text).
                 detalle = (f" {self.controller.ultimo_detalle}."

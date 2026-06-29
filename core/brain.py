@@ -294,6 +294,10 @@ NIM_SYSTEM_INSTRUCTION = (
     "(nunca escribas literalmente 'X Y').\n\n"
 ) + SYSTEM_INSTRUCTION
 
+# Prompt one-shot para confirmar 'done' (FIX #3): rol de verificador, no de operadora.
+_CONFIRM_SYS = ("Eres un verificador estricto. Mira la captura y responde SOLO con "
+                "'SI' o 'NO' seguido de 3-5 palabras de motivo. Nada de acciones.")
+
 # ─── Parsers de la respuesta ──────────────────────────────────────────────────
 _RE_PENSAMIENTO = re.compile(r"PENSAMIENTO\s*:\s*(.+?)(?:\n\s*ACCI[OÓ]N\s*:|\Z)",
                              re.I | re.S)
@@ -414,6 +418,30 @@ class Cerebro:
         if nota:
             self._historial.append({"role": "user", "parts": [{"text": nota}]})
             self._podar()
+
+    def confirmar_done(self, objetivo: str, imagen_b64: Optional[str]) -> bool:
+        """FIX #3: confirma un 'done' antes de aceptarlo. Pregunta a Gemini, sobre una
+        captura FRESCA, si la tarea se ve completada (rol verificador). Devuelve False
+        SOLO ante un 'NO' claro; ante SI / respuesta ambigua acepta (lenient: el
+        verificador del trainer es el juez final). Propaga LimiteAPIError."""
+        self._historial.append(self._mensaje_usuario(
+            f"VERIFICACIÓN (no emitas acciones): ¿la tarea «{objetivo}» está COMPLETADA "
+            "y visible en esta captura? Responde SOLO 'SI' o 'NO' + motivo breve.",
+            imagen_b64))
+        self._podar()
+        sys_g, nim_g = self._sys, self._nim_sys
+        self._sys = self._nim_sys = _CONFIRM_SYS          # rol verificador durante la llamada
+        try:
+            raw = self._llamar(profundo=False)
+        finally:
+            self._sys, self._nim_sys = sys_g, nim_g       # restaurar SIEMPRE
+        if raw:
+            self._historial.append({"role": "model", "parts": [{"text": raw}]})
+        m = re.search(r"\b(s[ií]|no)\b", raw or "", re.I)
+        confirmado = True if not m else (m.group(1).lower() != "no")
+        logger.info("Confirmación 'done': %s (%s)", "SI" if confirmado else "NO",
+                    (raw or "")[:50].replace("\n", " "))
+        return confirmado
 
     def reset(self) -> None:
         """Vacía el historial de la tarea en curso."""
