@@ -122,6 +122,15 @@ RAM_OVERLOAD_PCT  = 92.0
 TEMP_OVERLOAD_C   = 90.0   # °C (si el sensor está disponible; None si no)
 PAUSA_OVERLOADED  = 5.0    # s de espera defensiva antes de reintentar
 
+# ─── Modo AHORRO DE ENERGÍA (comportamiento del estado OVERLOADED) ────────────
+# Con el PC saturado, Aria reduce su PROPIO consumo en vez de solo esperar:
+#   · captura más pequeña y más comprimida (menos CPU, red y tokens),
+#   · razonamiento a budget 0 (ya mapeado arriba),
+#   · pausa defensiva (PAUSA_OVERLOADED),
+#   · avatar a ritmo lento (1 Hz en vez de 15 Hz).
+AHORRO_IMG_SIZE = 960      # px lado mayor de la captura en ahorro (normal: IMG_MAX_SIZE)
+AHORRO_JPEG_Q   = 70       # calidad JPEG en ahorro (normal: JPEG_QUALITY)
+
 # ─── Parada limpia / persistencia de estado ───────────────────────────────────
 STATE_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "aria_state.json")

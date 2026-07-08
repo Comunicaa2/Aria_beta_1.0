@@ -59,7 +59,8 @@ _ESTADO_HOTKEY: dict[Estado, Optional[str]] = {
     Estado.IDLE:       None,
 }
 
-_TICK_ANIM = 1 / 15.0    # 15 Hz de animación matemática
+_TICK_ANIM   = 1 / 15.0  # 15 Hz de animación matemática
+_TICK_AHORRO = 1.0       # 1 Hz en OVERLOADED (modo ahorro: no sumar carga al PC)
 
 
 class VTuberAvatar:
@@ -71,6 +72,7 @@ class VTuberAvatar:
         self._lock = threading.Lock()
         self._proveedor = proveedor_telemetria     # devuelve una Lectura (cpu/ram)
         self._hotkey_activo: Optional[str] = None
+        self._estado_fsm = Estado.IDLE             # para el tick de ahorro
         self._stop = threading.Event()
         self._hilo: Optional[threading.Thread] = None
 
@@ -97,6 +99,7 @@ class VTuberAvatar:
     # ── API pública ────────────────────────────────────────────────────────────
     def set_estado(self, estado: Estado) -> None:
         """Refleja el estado de la FSM como expresión persistente. No-op si inactivo."""
+        self._estado_fsm = estado
         if not self.activo:
             return
         hotkey = _ESTADO_HOTKEY.get(estado)
@@ -157,7 +160,8 @@ class VTuberAvatar:
                 })
             except Exception as exc:               # noqa: BLE001
                 logger.debug("Avatar anim: fallo (%s) — sigo.", exc)
-            self._stop.wait(_TICK_ANIM)
+            self._stop.wait(_TICK_AHORRO if self._estado_fsm is Estado.OVERLOADED
+                            else _TICK_ANIM)
 
     def _telemetria(self) -> tuple[float, float]:
         if self._proveedor is None:

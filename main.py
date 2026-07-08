@@ -28,6 +28,8 @@ import time
 from config import (
     AGENT_NAME,
     AGENT_VERSION,
+    AHORRO_IMG_SIZE,
+    AHORRO_JPEG_Q,
     DELAY_ESTABILIDAD,
     LOG_LEVEL,
     MAX_PASOS_TAREA,
@@ -126,7 +128,8 @@ class Aria:
                 sobrecargado = lec.sobrecargado
                 if sobrecargado:
                     self.fsm.a_overloaded()
-                    logger.warning("OVERLOADED — %s. Pausa %.1fs y razonamiento superficial.",
+                    logger.warning("OVERLOADED — %s. Modo AHORRO: pausa %.1fs, captura "
+                                   "reducida y razonamiento superficial.",
                                    lec.resumen(), PAUSA_OVERLOADED)
                     self._dormir(PAUSA_OVERLOADED)
 
@@ -135,9 +138,13 @@ class Aria:
                 profundo = (not sobrecargado) and (ciclo_inicial == ciclo or fallos_seguidos >= 2)
 
                 # ── 1. PERCEPCIÓN (en RAM; consola fuera de la captura) ────
-                self.fsm.a_thinking()
+                # OVERLOADED mantiene su estado en la FSM; a_thinking solo se usa
+                # con el PC sano. En modo AHORRO la captura va reducida.
+                if not sobrecargado:
+                    self.fsm.a_thinking()
                 image.minimizar_consola()
-                cap = image.capturar()
+                cap = (image.capturar(max_size=AHORRO_IMG_SIZE, calidad=AHORRO_JPEG_Q)
+                       if sobrecargado else image.capturar())
                 if cap is None or not cap.b64:
                     logger.error("Percepción fallida: sin captura — no se actúa a ciegas.")
                     return ABORTADO
