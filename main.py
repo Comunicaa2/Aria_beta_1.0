@@ -131,7 +131,7 @@ class Aria:
                     logger.warning("OVERLOADED — %s. Modo AHORRO: pausa %.1fs, captura "
                                    "reducida y razonamiento superficial.",
                                    lec.resumen(), PAUSA_OVERLOADED)
-                    self._dormir(PAUSA_OVERLOADED)
+                    time.sleep(PAUSA_OVERLOADED)
 
                 # Profundidad de razonamiento: profundo al arrancar o si está
                 # atascada; superficial si el PC va saturado (máxima velocidad).
@@ -240,7 +240,6 @@ class Aria:
             objetivo=objetivo,
             ciclo=ciclo,
             completado=False,
-            fsm=self.fsm.estado.name,
             historial=self.cerebro.exportar_historial(),
             stats=self.stats,
         )
@@ -320,9 +319,6 @@ class Aria:
                 stop_event.wait(1.0)
 
     # ── Util ─────────────────────────────────────────────────────────────────────
-    def _dormir(self, segundos: float) -> None:
-        time.sleep(max(0.0, segundos))
-
     def estado_resumen(self) -> str:
         return (f"FSM: {self.fsm.estado.name} | Avatar: "
                 f"{'activo' if self.avatar.activo else 'inactivo'} | "

@@ -41,13 +41,6 @@ except Exception as _exc:                       # noqa: BLE001
     _PIL_OK = False
     logger.warning("Pillow no disponible (%s) — la visión quedará inactiva.", _exc)
 
-try:
-    import numpy as _np                          # acelera el diff de miniaturas
-    _NP_OK = True
-except Exception:                                # noqa: BLE001
-    _np = None                                    # type: ignore[assignment]
-    _NP_OK = False
-
 
 @dataclass
 class Captura:
@@ -147,12 +140,9 @@ def hwnd_consola():
         return None
 
 
-_hwnd_consola = hwnd_consola   # alias interno (callers de este módulo)
-
-
 def minimizar_consola(settle: float = 0.18) -> bool:
     """Minimiza la consola de Aria para que NO salga en la captura. Idempotente."""
-    hwnd = _hwnd_consola()
+    hwnd = hwnd_consola()
     if not hwnd:
         return False
     try:
@@ -173,7 +163,7 @@ def restaurar_consola() -> bool:
     """Restaura la consola de Aria al terminar la tarea, SIN traerla al frente
     (SW_SHOWNOACTIVATE): así no tapa la app recién abierta cuando el verificador
     captura la pantalla. Resiliente."""
-    hwnd = _hwnd_consola()
+    hwnd = hwnd_consola()
     if not hwnd:
         return False
     try:
@@ -268,13 +258,10 @@ def _mini(monitor_index: int = MONITOR_INDEX) -> Optional[bytes]:
 
 
 def _diff(a: Optional[bytes], b: Optional[bytes]) -> float:
-    """Diferencia media normalizada [0..1] entre dos miniaturas (1.0 si faltan)."""
+    """Diferencia media normalizada [0..1] entre dos miniaturas (1.0 si faltan).
+    Puro Python: a 64x64 px (4 KB) el bucle cuesta ~1 ms, no amerita numpy."""
     if not a or not b or len(a) != len(b):
         return 1.0
-    if _NP_OK:
-        va = _np.frombuffer(a, dtype=_np.uint8).astype(_np.int16)
-        vb = _np.frombuffer(b, dtype=_np.uint8).astype(_np.int16)
-        return float(_np.mean(_np.abs(va - vb))) / 255.0
     total = sum(abs(x - y) for x, y in zip(a, b))
     return (total / len(a)) / 255.0
 

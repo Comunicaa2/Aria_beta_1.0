@@ -17,6 +17,7 @@ multimodal nativo (imagen + comando en un solo flujo), rápido y sin GPU local.
 ```
 Aria_beta_1.0/
   config.py            configuración + API key de Gemini
+  compartido.py        común Aria/entrenador: dotenv, rate limiter, constantes
   main.py              entrada + consola + ciclo cognitivo (orquestador)
   core/
     brain.py           llama a Gemini con imagen + comando; parsea la respuesta
@@ -78,8 +79,8 @@ FIN
 
 Cuando Gemini responde **429**, Aria:
 1. Termina la acción en curso.
-2. Guarda en `aria_state.json`: tarea pendiente, ciclo, historial (sin imágenes),
-   estado de la FSM y estadísticas.
+2. Guarda en `aria_state.json`: tarea pendiente, ciclo, historial (sin imágenes)
+   y estadísticas.
 3. Se detiene limpiamente.
 
 Al reiniciar, detecta la tarea pendiente y ofrece **continuarla** donde se quedó.
@@ -116,4 +117,3 @@ Requiere VTube Studio con la API activada (puerto 8001) y estos hotkeys tipo
 El avatar refleja el estado de la FSM y se mueve con ondas matemáticas en función
 de la telemetría (la cabeza cabecea más cuanto más sube la CPU). Si VTube Studio
 no está abierto, el avatar simplemente queda inactivo.
-```

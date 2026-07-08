@@ -2,9 +2,9 @@
 core/state.py — Guardado y carga de estado de Aria 1.0 (parada limpia).
 
 Cuando se alcanza el límite de la API (429) Aria termina la acción en curso y
-GUARDA: la tarea pendiente, el historial de conversación, el estado de la FSM y
-las estadísticas. Al reiniciar, `cargar()` recupera ese estado para continuar la
-tarea donde se quedó.
+GUARDA: la tarea pendiente, el historial de conversación y las estadísticas.
+Al reiniciar, `cargar()` recupera ese estado para continuar la tarea donde se
+quedó.
 
 Formato: un único JSON en disco (STATE_FILE). Escritura atómica (archivo temporal
 + replace) para no corromper el estado si el proceso muere a mitad de guardado.
@@ -28,7 +28,6 @@ class EstadoGuardado:
     objetivo: str = ""                       # tarea pendiente ("" = ninguna)
     ciclo: int = 0                           # ciclo de visión alcanzado
     completado: bool = True                  # True si no quedó nada pendiente
-    fsm: str = "IDLE"                        # último estado de la FSM
     historial: list = field(default_factory=list)   # turnos [{role, content}]
     stats: dict = field(default_factory=dict)        # contadores acumulados
     guardado_en: float = 0.0                 # timestamp epoch del guardado

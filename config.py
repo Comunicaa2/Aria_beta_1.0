@@ -12,6 +12,8 @@ sistema falla al arrancar con un mensaje claro.
 
 import os
 
+from compartido import cargar_dotenv
+
 # ─── Identidad ────────────────────────────────────────────────────────────────
 AGENT_NAME    = "Aria"
 AGENT_VERSION = "1.0.0"
@@ -19,31 +21,8 @@ AGENT_VERSION = "1.0.0"
 # Directorio base del proyecto (este archivo).
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
-def _cargar_dotenv(ruta: str) -> None:
-    """
-    Cargador .env mínimo (sin dependencias): vuelca las claves KEY=VALUE del
-    archivo en os.environ SIN pisar variables ya definidas en el entorno real
-    (estas tienen prioridad). Ignora comentarios (#) y líneas vacías. Si el
-    archivo no existe, no hace nada.
-    """
-    if not os.path.isfile(ruta):
-        return
-    try:
-        with open(ruta, "r", encoding="utf-8") as f:
-            for linea in f:
-                linea = linea.strip()
-                if not linea or linea.startswith("#") or "=" not in linea:
-                    continue
-                clave, _, valor = linea.partition("=")
-                valor = valor.strip().strip('"').strip("'")
-                os.environ.setdefault(clave.strip(), valor)
-    except OSError:
-        pass
-
-
 # Carga el .env antes de leer cualquier variable de entorno.
-_cargar_dotenv(os.path.join(_BASE_DIR, ".env"))
+cargar_dotenv(os.path.join(_BASE_DIR, ".env"))
 
 # ─── Gemini (Google AI Studio) ────────────────────────────────────────────────
 # Modelo multimodal nativo: procesa imagen + texto en un solo flujo.
