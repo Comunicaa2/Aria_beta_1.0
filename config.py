@@ -1,5 +1,5 @@
 """
-config.py — Configuración global de Aria 1.0 (motor Gemini 2.5 Flash).
+config.py — Configuración global de Aria 1.0 (motor Gemini 3.5 Flash).
 
 Toda variable ajustable del sistema vive aquí. Filosofía de esta versión:
 RAPIDEZ + CALIDAD. Captura en RAM (cero disco), historial mínimo, respuestas
@@ -51,7 +51,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     raise RuntimeError("Configura GEMINI_API_KEY en el archivo .env")
 
-GEMINI_MODEL   = os.getenv("ARIA_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL   = os.getenv("ARIA_MODEL", "gemini-3.5-flash")
 GEMINI_BASE    = "https://generativelanguage.googleapis.com/v1beta"
 # URL final del endpoint generateContent (se construye con el modelo activo).
 GEMINI_URL     = f"{GEMINI_BASE}/models/{GEMINI_MODEL}:generateContent"
@@ -87,7 +87,7 @@ GEN_MAX_TOKENS    = 256            # tope de tokens VISIBLES de respuesta por tu
 GEN_STOP          = ["FIN"]        # corta la generación en el terminador del formato
 
 # ─── Presupuesto de razonamiento (mapeado a la FSM) ───────────────────────────
-# Gemini 2.5 Flash es un modelo "thinking". Para máxima velocidad lo desactivamos
+# Gemini 3.5 Flash es un modelo "thinking". Para máxima velocidad lo desactivamos
 # (budget 0) en estado WORKING; en THINKING le damos margen para problemas duros.
 # En OVERLOADED (PC saturado) se fuerza a 0 para reducir la profundidad de cálculo.
 THINK_BUDGET_RAPIDO   = 0          # WORKING / acción directa → sin pensamiento extra

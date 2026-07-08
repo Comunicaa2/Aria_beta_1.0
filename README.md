@@ -1,7 +1,7 @@
-# Aria 1.0 — Agente autónomo de PC (Gemini 2.5 Flash)
+# Aria 1.0 — Agente autónomo de PC (Gemini 3.5 Flash)
 
 Reescritura desde cero del agente Aria. La v0.3 usaba un modelo local (Ollama,
-`qwen3-vl`); la **1.0** usa **Gemini 2.5 Flash** directo vía Google AI Studio:
+`qwen3-vl`); la **1.0** usa **Gemini 3.5 Flash** directo vía Google AI Studio:
 multimodal nativo (imagen + comando en un solo flujo), rápido y sin GPU local.
 
 ## Filosofía
