@@ -556,6 +556,11 @@ class Controller:
                 return False
             if fg == ctypes.windll.kernel32.GetConsoleWindow():
                 return False
+            # Bajo Windows Terminal la consola real es la ventana del terminal
+            # ancestro, no la de GetConsoleWindow (oculta por ConPTY).
+            from utils.image import hwnd_consola
+            if fg == hwnd_consola():
+                return False
             buf = ctypes.create_unicode_buffer(256)
             u32.GetClassNameW(fg, buf, 256)
             return buf.value not in ("Progman", "WorkerW")   # escritorio

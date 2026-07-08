@@ -94,12 +94,60 @@ _SW_RESTORE  = 9
 _SW_SHOWNOACTIVATE = 4   # restaura SIN activar/traer-al-frente (no tapa la app)
 
 
-def _hwnd_consola():
+# HWND cacheado de la ventana de terminal ancestro (Windows Terminal / ConPTY).
+_HWND_TERMINAL_CACHE: list = []          # [] = sin buscar; [hwnd|None] = resuelto
+
+
+def _hwnd_terminal_ancestro():
+    """Bajo Windows Terminal, GetConsoleWindow devuelve la ventana OCULTA del host
+    ConPTY: minimizarla no hace nada y la consola sale en las capturas. Se busca la
+    ventana visible del proceso WindowsTerminal.exe ancestro (vía psutil). Cachea el
+    resultado (la terminal no cambia durante la sesión). None si no aplica."""
+    if _HWND_TERMINAL_CACHE:
+        return _HWND_TERMINAL_CACHE[0]
+    hwnd_term = None
     try:
         import ctypes
-        return ctypes.windll.kernel32.GetConsoleWindow() or None
+        from ctypes import wintypes
+        import psutil
+        pids = {p.pid for p in psutil.Process().parents()
+                if p.name().lower() == "windowsterminal.exe"}
+        if pids:
+            u32 = ctypes.windll.user32
+            encontrado = []
+
+            @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            def _cb(hwnd, _lp):
+                pid = wintypes.DWORD()
+                u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value in pids and u32.IsWindowVisible(hwnd):
+                    encontrado.append(hwnd)
+                    return False                 # detener enumeración
+                return True
+
+            u32.EnumWindows(_cb, 0)
+            hwnd_term = encontrado[0] if encontrado else None
+    except Exception:                            # noqa: BLE001
+        hwnd_term = None
+    _HWND_TERMINAL_CACHE.append(hwnd_term)
+    return hwnd_term
+
+
+def hwnd_consola():
+    """HWND de la ventana VISIBLE que aloja la consola de Aria: la propia consola
+    clásica (conhost) o, bajo Windows Terminal, la ventana del terminal ancestro.
+    None si no se puede determinar. Lo usan minimizar/restaurar y el controller."""
+    try:
+        import ctypes
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd and ctypes.windll.user32.IsWindowVisible(hwnd):
+            return hwnd
+        return _hwnd_terminal_ancestro() or (hwnd or None)
     except Exception:                            # noqa: BLE001
         return None
+
+
+_hwnd_consola = hwnd_consola   # alias interno (callers de este módulo)
 
 
 def minimizar_consola(settle: float = 0.18) -> bool:

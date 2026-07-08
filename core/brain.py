@@ -316,6 +316,10 @@ _RE_COMANDO_SUELTO = re.compile(
 # Lista EXACTA (a propósito NO incluye 'scroll'). Si tras el primer token aparece
 # otro de estos verbos, se conserva solo el primer comando y se descarta el resto.
 _VERBOS_ACCION = ("click", "double_click", "type", "key", "hotkey", "wait", "done")
+# Tras 'type' el argumento es TEXTO LIBRE que puede contener 'click', 'done', etc.
+# de forma legítima ("type Haz click en guardar"): solo cortan key/hotkey, que es
+# lo que el modelo encadena en la práctica ('type calc key enter').
+_VERBOS_TRAS_TYPE = ("key", "hotkey")
 
 
 def _un_solo_comando(accion: str) -> str:
@@ -328,8 +332,9 @@ def _un_solo_comando(accion: str) -> str:
     if not accion:
         return accion
     tokens = accion.split()
+    verbos = _VERBOS_TRAS_TYPE if tokens[0].lower() == "type" else _VERBOS_ACCION
     for i in range(1, len(tokens)):
-        if tokens[i].lower() in _VERBOS_ACCION:
+        if tokens[i].lower() in verbos:
             recortada = " ".join(tokens[:i])
             descartado = " ".join(tokens[i:])
             logger.warning("Parser: varios comandos en una acción — conservo '%s', "

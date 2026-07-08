@@ -284,17 +284,25 @@ class Aria:
                 resultado = self.ejecutar_protegido(a.get("texto", ""))
 
                 # Marcar ejecutada (el Entrenador la verificará con visión).
-                a["estado"] = _proto.EJECUTADA
-                a["resultado_aria"] = resultado
-                a["acciones_modelo"] = dict(self.ultimas_acciones_modelo)
-                a["modelo_final"] = self.cerebro.ultimo_modelo
-                a["terminado_en"] = time.time()
-                _proto.escribir_activa(a)
-                logger.info("[ENTRENADOR] Tarea ejecutada (%s) [%s | G:%d L:%d O:%d] — esperando verificación.",
-                            resultado, self.cerebro.ultimo_modelo,
-                            self.ultimas_acciones_modelo.get(MODELO_GEMINI, 0),
-                            self.ultimas_acciones_modelo.get(MODELO_NIM_LLAMA, 0),
-                            self.ultimas_acciones_modelo.get(MODELO_NIM_OMNI, 0))
+                # Si la ranura ya no contiene NUESTRA tarea (expiró y, tras la
+                # gracia, el entrenador la liberó y promovió otra), no escribir:
+                # se pisaría la tarea nueva.
+                actual = _proto.leer_activa()
+                if actual is None or actual.get("id") != a.get("id"):
+                    logger.warning("[ENTRENADOR] La ranura cambió durante la ejecución "
+                                   "(tarea expirada y reasignada) — resultado descartado.")
+                else:
+                    a["estado"] = _proto.EJECUTADA
+                    a["resultado_aria"] = resultado
+                    a["acciones_modelo"] = dict(self.ultimas_acciones_modelo)
+                    a["modelo_final"] = self.cerebro.ultimo_modelo
+                    a["terminado_en"] = time.time()
+                    _proto.escribir_activa(a)
+                    logger.info("[ENTRENADOR] Tarea ejecutada (%s) [%s | G:%d L:%d O:%d] — esperando verificación.",
+                                resultado, self.cerebro.ultimo_modelo,
+                                self.ultimas_acciones_modelo.get(MODELO_GEMINI, 0),
+                                self.ultimas_acciones_modelo.get(MODELO_NIM_LLAMA, 0),
+                                self.ultimas_acciones_modelo.get(MODELO_NIM_OMNI, 0))
 
                 if resultado == LIMITE:
                     logger.warning("[ENTRENADOR] 429: Aria detiene el consumo de tareas.")
