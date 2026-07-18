@@ -44,14 +44,15 @@ TRAINING_MODE  = os.getenv("ARIA_TRAINING_MODE", "false").lower() == "true"
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-# Cadena de fallback NIM, probada EN ORDEN tras un 429 de Gemini:
-#   1º MiniMax M3 (minimaxai/minimax-m3).
-#   2º multimodal NO razonador como último recurso.
-# Verificado disponible y consistente: meta/llama-3.2-90b-vision-instruct (4/4).
+# Cadena de fallback NIM, probada EN ORDEN tras un 429 de Gemini. Aria es un
+# agente BASADO EN VISIÓN: el fallback primario debe poder ver la captura, o
+# razona a ciegas (causa confirmada de tareas atascadas/expiradas en training).
+#   1º meta/llama-3.2-90b-vision-instruct (CON visión, probado 4/4 consistente).
+#   2º minimaxai/minimax-m3 (sin visión) como último recurso.
 NVIDIA_MODEL_PRIMARIO   = os.getenv("ARIA_NVIDIA_MODEL",
-                                    "minimaxai/minimax-m3")
-NVIDIA_MODEL_SECUNDARIO = os.getenv("ARIA_NVIDIA_MODEL_2",
                                     "meta/llama-3.2-90b-vision-instruct")
+NVIDIA_MODEL_SECUNDARIO = os.getenv("ARIA_NVIDIA_MODEL_2",
+                                    "minimaxai/minimax-m3")
 NVIDIA_FALLBACK_MODELS  = [NVIDIA_MODEL_PRIMARIO, NVIDIA_MODEL_SECUNDARIO]
 
 # ─── Generación del modelo ────────────────────────────────────────────────────

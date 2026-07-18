@@ -25,6 +25,14 @@ import sys
 import threading
 import time
 
+# Consola robusta: el banner usa '═' y emojis; con la salida redirigida (log) o
+# en cmd.exe (cp1252) esto crashearía. Mismo fix que trainer/entrenador.py.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:                                  # noqa: BLE001
+    pass
+
 from config import (
     AGENT_NAME,
     AGENT_VERSION,
@@ -220,6 +228,9 @@ class Aria:
                     self.cerebro.registrar_resultado(
                         f"Sistema: la acción '{decision.accion}' falló o no es válida.{detalle} Prueba otra."
                     )
+                    if fallos_seguidos >= 3:
+                        logger.error("Demasiados fallos de ejecución consecutivos — abortando tarea.")
+                        return ABORTADO
 
             logger.info("Se alcanzó el tope de %d ciclos.", MAX_PASOS_TAREA)
             return AGOTADO

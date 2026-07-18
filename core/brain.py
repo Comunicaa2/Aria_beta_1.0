@@ -96,9 +96,17 @@ def _limpiar_think(texto: str) -> str:
 
 
 def _limpiar_accion(acc: str) -> str:
-    """Recorta basura JSON/comillas del valor de ACCION (p. ej. "done'}]" → "done")."""
-    acc = re.split(r"[\r\n}\]]", acc)[0]             # corta en el 1.er ruido estructural
-    return acc.strip().strip("'\"").rstrip("'\"}],) ").strip()
+    """Recorta basura JSON/comillas del valor de ACCION (p. ej. "done'}]" → "done").
+    Solo quita una comilla de extremo si NO tiene pareja (conteo impar): así
+    'click_ui "Cerrar"' conserva sus comillas intactas."""
+    acc = re.split(r"[\r\n}\]]", acc)[0].strip()     # corta en el 1.er ruido estructural
+    if len(acc) >= 2 and acc[0] == acc[-1] and acc[0] in "'\"":
+        acc = acc[1:-1]                              # acción ENVUELTA en comillas
+    if acc and acc[0] in "'\"" and acc.count(acc[0]) % 2 == 1:
+        acc = acc[1:]
+    if acc and acc[-1] in "'\"" and acc.count(acc[-1]) % 2 == 1:
+        acc = acc[:-1]
+    return acc.rstrip("}],) ").strip()
 
 
 def _aislar_formato(texto: str) -> str:
@@ -154,6 +162,8 @@ FIN
 
 COMANDOS VÁLIDOS (uno solo por respuesta):
 launch_app NOMBRE       abre una app por su nombre — ej: launch_app notepad
+click_ui "NOMBRE"       clica un elemento de la ventana ACTIVA por su nombre visible
+                        (botón, menú, campo) — ej: click_ui "Guardar"
 click X Y               clic izquierdo — ej: click 640 360
 double_click X Y        doble clic — ej: double_click 120 200
 right_click X Y         clic derecho (menú contextual) — ej: right_click 500 300
@@ -181,8 +191,13 @@ REGLAS CRÍTICAS:
 3. PARA ABRIR PROGRAMAS usa launch_app (ej: launch_app calc). NO uses win+r ni
    otras hotkeys del sistema: están BLOQUEADAS por seguridad. Reserva el clic para
    botones sin atajo.
-4. ¿No estás segura de las coordenadas? Usa find_text "etiqueta" (o find_image
-   ruta.png): te devolverán las coords y luego harás click X Y sobre ellas.
+4. PARA CLICAR ELEMENTOS CON TEXTO/NOMBRE (botones, menús, opciones) PREFIERE
+   click_ui "nombre" con el nombre EXACTO visible del elemento. Puede fallar si
+   el nombre no coincide, es ambiguo o la app no expone su UI al sistema. Si
+   click_ui falla, o si repites el mismo PENSAMIENTO 2 turnos seguidos sin
+   avanzar, CAMBIA de estrategia: usa find_text "etiqueta" (o find_image
+   ruta.png) y luego click X Y sobre las coords devueltas. No insistas con lo
+   que ya falló.
 5. PENSAMIENTO máximo 2 líneas. Nada de explicaciones largas.
 6. Si la tarea ya está hecha, responde con ACCION: done.
 7. Termina SIEMPRE con FIN en su propia línea.
@@ -207,9 +222,9 @@ _RE_PENSAMIENTO = re.compile(r"PENSAMIENTO\s*:\s*(.+?)(?:\n\s*ACCI[OÓ]N\s*:|\Z)
 _RE_ACCION      = re.compile(r"ACCI[OÓ]N\s*:\s*(.+?)(?:\n|FIN|\Z)", re.I | re.S)
 # Respaldo: si el modelo omite el prefijo, reconoce un comando suelto.
 _RE_COMANDO_SUELTO = re.compile(
-    r"^(?:launch_app|double_click|right_click|middle_click|hold_key|find_text|"
-    r"find_image|focus_window|hscroll|click|type|key|hotkey|scroll|drag|hover|"
-    r"wait|done)\b.*$", re.I | re.M
+    r"^(?:launch_app|double_click|right_click|middle_click|hold_key|click_ui|"
+    r"find_text|find_image|focus_window|hscroll|click|type|key|hotkey|scroll|"
+    r"drag|hover|wait|done)\b.*$", re.I | re.M
 )
 
 # Verbos de comando para detectar acciones encadenadas ("type calc key enter").

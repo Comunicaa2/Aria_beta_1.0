@@ -17,6 +17,7 @@ Comandos válidos (uno por turno):
     hold_key MOD+click X Y  mantén MOD (shift/ctrl/alt) y clic en (X,Y) (multi-selección)
     hold_key MOD+key T      mantén MOD y pulsa la tecla T
     launch_app NOMBRE   lanza una app por nombre (launch_app notepad / calc / msedge)
+    click_ui "T"        UI Automation: clica el elemento con nombre T en la ventana activa
     find_text "T"       OCR: localiza el texto T y reporta sus coords (no clica)
     find_image RUTA     localiza un PNG en pantalla y reporta sus coords (no clica)
     focus_window "T"    trae al frente la ventana cuyo título contiene T
@@ -30,6 +31,7 @@ Envuelve pyautogui de forma resiliente: si no está disponible, entra en modo
 SIMULACIÓN (registra la acción pero no la ejecuta) y nunca lanza hacia arriba.
 """
 
+import difflib
 import logging
 import os
 import re
@@ -109,6 +111,46 @@ def _es_hotkey_prohibida(norm: list[str]) -> bool:
     combo = frozenset(_ALIAS_TECLAS.get(t, t) for t in norm)
     return combo in _HOTKEYS_PROHIBIDAS
 
+
+# Control types de UI Automation sobre los que tiene sentido clicar por nombre.
+# Excluye deliberadamente Text y contenedores (Pane, Group, Document…): eran la
+# causa del misclick "no" → "Novedades"/párrafos largos.
+_CONTROL_TYPES_ACCIONABLES = frozenset({
+    "Button", "SplitButton", "CheckBox", "RadioButton", "ComboBox",
+    "MenuItem", "ListItem", "DataItem", "TabItem", "TreeItem", "Hyperlink",
+})
+
+
+def _es_control_accionable(elem) -> bool:
+    """True si el control type del elemento está en la allowlist accionable."""
+    try:
+        return elem.element_info.control_type in _CONTROL_TYPES_ACCIONABLES
+    except Exception:                              # noqa: BLE001
+        return False
+
+
+def _buscar_por_palabra(obj: str, candidatos):
+    """Busca `obj` como PALABRA COMPLETA en los nombres de `candidatos`
+    [(nombre, elem)]. Devuelve (elem, n_matches). Con varios matches desambigua
+    por similitud (difflib) y, en empate, por nombre más corto; empate genuino
+    (misma similitud Y longitud) → (None, n) con n>=2: mejor fallar que adivinar."""
+    patron = re.compile(rf"\b{re.escape(obj)}\b", re.I)
+    matches = [(n, e) for n, e in candidatos if patron.search(n)]
+    if not matches:
+        return None, 0
+    if len(matches) == 1:
+        return matches[0][1], 1
+    puntuados = sorted(
+        ((difflib.SequenceMatcher(None, obj, n.lower()).ratio(), -len(n), n, e)
+         for n, e in matches),
+        key=lambda t: (t[0], t[1]), reverse=True,
+    )
+    mejor, segundo = puntuados[0], puntuados[1]
+    if mejor[0] == segundo[0] and len(mejor[2]) == len(segundo[2]):
+        return None, len(matches)
+    return mejor[3], len(matches)
+
+
 # ─── Patrones de comandos ─────────────────────────────────────────────────────
 _RE_CLICK        = re.compile(r"^click\s+(-?\d+)\s+(-?\d+)\s*$",        re.I)
 _RE_DOUBLE_CLICK = re.compile(r"^double_click\s+(-?\d+)\s+(-?\d+)\s*$", re.I)
@@ -124,6 +166,7 @@ _RE_KEY          = re.compile(r"^key\s+(\S+)\s*$",                       re.I)
 _RE_HOTKEY       = re.compile(r"^hotkey\s+([\w]+(?:\+[\w]+)*)\s*$",      re.I)
 _RE_WAIT         = re.compile(r"^wait\s+(\d+(?:\.\d+)?)\s*$",            re.I)
 _RE_LAUNCH       = re.compile(r"^launch_app\s+(.+?)\s*$",                re.I)
+_RE_CLICK_UI     = re.compile(r'^click_ui\s+["\']?(.+?)["\']?\s*$',      re.I)
 _RE_FIND_TEXT    = re.compile(r'^find_text\s+["\']?(.+?)["\']?\s*$',     re.I)
 _RE_FIND_IMAGE   = re.compile(r'^find_image\s+["\']?(.+?)["\']?\s*$',    re.I)
 _RE_FOCUS_WIN    = re.compile(r'^focus_window\s+["\']?(.+?)["\']?\s*$',  re.I)
@@ -194,6 +237,10 @@ class Controller:
             m = _RE_LAUNCH.match(cmd)
             if m:
                 return self._launch_app(m.group(1))
+
+            m = _RE_CLICK_UI.match(cmd)
+            if m:
+                return self._click_ui(m.group(1))
 
             m = _RE_FIND_TEXT.match(cmd)
             if m:
@@ -298,6 +345,74 @@ class Controller:
             logger.warning("launch_app: no se pudo lanzar '%s' — %s", nombre, exc)
             return False
         logger.info("launch_app '%s'.", nombre)
+        return True
+
+    def _click_ui(self, texto: str) -> bool:
+        """Clica el elemento de UI con NOMBRE (accesibilidad) `texto`, buscándolo
+        con Windows UI Automation en la ventana en PRIMER PLANO. Orden: exacta →
+        palabra completa entre controles ACCIONABLES (botones, menús…) → palabra
+        completa sin filtro si el árbol no expone tipos (Electron/web). Ambiguo o
+        sin match → falla limpio (jamás clica a ciegas por substring). El clic
+        reusa el camino verificado de _click (corner-check + cursor medido).
+        Degrada limpio si pywinauto no está instalado."""
+        # ponytail: busca SOLO la ventana activa; ampliar a todas si hace falta.
+        texto = texto.strip().strip('"').strip("'")
+        if not texto:
+            return False
+        if self.simulacion:
+            logger.info("[SIM] click_ui('%s')", texto)
+            return True
+        try:
+            from pywinauto import Desktop
+        except ImportError as exc:
+            logger.warning("click_ui: pywinauto no disponible (%s).", exc)
+            self.ultimo_detalle = "click_ui: pywinauto no instalado"
+            return False
+        try:
+            import ctypes
+            fg = ctypes.windll.user32.GetForegroundWindow()
+            if not fg:
+                self.ultimo_detalle = "click_ui: no hay ventana activa donde buscar"
+                return False
+            ventana = Desktop(backend="uia").window(handle=fg).wrapper_object()
+            candidatos = [(e.window_text(), e) for e in ventana.descendants()
+                          if e.window_text()]
+        except Exception as exc:                   # noqa: BLE001
+            logger.warning("click_ui: fallo consultando UI Automation — %s", exc)
+            self.ultimo_detalle = "click_ui: fallo leyendo el árbol de UI"
+            return False
+
+        obj = texto.lower()
+        elem = next((e for n, e in candidatos if n.lower() == obj), None)
+        if elem is None:
+            # Sin exacta: palabra completa SOLO entre controles accionables
+            # (evita matchear "no" contra "Novedades" o párrafos de texto).
+            accionables = [(n, e) for n, e in candidatos if _es_control_accionable(e)]
+            elem, n_matches = _buscar_por_palabra(obj, accionables)
+            if elem is None and n_matches == 0 and not accionables:
+                # Árbol UIA sin control types útiles (típico en Electron/web):
+                # reintento sin filtro de tipo, pero siempre por palabra completa.
+                logger.warning("click_ui: sin controles accionables en el árbol — "
+                               "reintento sin filtro de tipo.")
+                elem, n_matches = _buscar_por_palabra(obj, candidatos)
+            if elem is None:
+                if n_matches >= 2:
+                    self.ultimo_detalle = (f"click_ui: '{texto}' es ambiguo "
+                                           f"({n_matches} elementos coinciden) — "
+                                           "usa el nombre completo o find_text")
+                else:
+                    self.ultimo_detalle = (f"click_ui: elemento '{texto}' no existe en la "
+                                           "ventana activa — prueba find_text o click X Y")
+                logger.info("click_ui: '%s' sin match claro (%d candidatos, %d coincidencias).",
+                            texto, len(candidatos), n_matches)
+                return False
+        r = elem.rectangle()
+        x, y = r.mid_point().x, r.mid_point().y
+        nombre = elem.window_text()[:40]
+        if not self._click(x, y, cap=None, doble=False):   # coords ya REALES
+            return False
+        self.ultimo_detalle = f"click_ui: '{nombre}' clicado en ({x},{y})"
+        logger.info("click_ui: '%s' → real(%d,%d).", nombre, x, y)
         return True
 
     def _find_text(self, objetivo: str, cap: Optional[Captura]) -> bool:
