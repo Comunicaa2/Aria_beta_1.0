@@ -1,8 +1,13 @@
-# Aria 1.0 — Agente autónomo de PC (Gemini 3.5 Flash)
+# Aria 1.0 — Sistema reactivo que usa el PC mediante visión (Gemini 3.5 Flash)
 
-Reescritura desde cero del agente Aria. La v0.3 usaba un modelo local (Ollama,
-`qwen3-vl`); la **1.0** usa **Gemini 3.5 Flash** directo vía Google AI Studio:
-multimodal nativo (imagen + comando en un solo flujo), rápido y sin GPU local.
+Aria no es un agente al uso: es un **sistema reactivo siempre en segundo plano**,
+a la espera de peticiones. Cuando recibe una, usa el PC como lo haría una persona:
+mira la pantalla (visión LLM) y actúa con mouse y teclado hasta completarla; luego
+vuelve al reposo (`IDLE`, cero gasto de API).
+
+Reescritura desde cero. La v0.3 usaba un modelo local (Ollama, `qwen3-vl`); la
+**1.0** usa **Gemini 3.5 Flash** directo vía Google AI Studio: multimodal nativo
+(imagen + comando en un solo flujo), rápido y sin GPU local.
 
 ## Filosofía
 
@@ -84,6 +89,21 @@ Cuando Gemini responde **429**, Aria:
 3. Se detiene limpiamente.
 
 Al reiniciar, detecta la tarea pendiente y ofrece **continuarla** donde se quedó.
+
+## Requisitos mínimos
+
+| Requisito | Mínimo |
+|-----------|--------|
+| SO | Windows 10/11 (usa UI Automation, `os.startfile` y pywinauto — solo Windows) |
+| Python | 3.10 o superior |
+| Hardware | Cualquier PC que mueva Windows con soltura (~4 GB RAM libres); **no requiere GPU**, la inferencia es en la nube |
+| Red | Conexión a internet estable (cada ciclo sube una captura a Gemini) |
+| API key | `GEMINI_API_KEY` de [Google AI Studio](https://aistudio.google.com/) (el tier gratuito sirve) |
+
+Opcionales (se degradan solos si faltan):
+- **Tesseract OCR** instalado en el SO — habilita `find_text`.
+- **`NVIDIA_API_KEY`** — fallback NIM cuando Gemini devuelve 429 (solo en modo entrenamiento).
+- **VTube Studio** con API activada — avatar reactivo.
 
 ## Instalación y uso
 
