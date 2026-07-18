@@ -16,3 +16,9 @@ tasks/rate_gemini.json
 tasks/rate_gemini.lock
 tasks/*.lock
 tasks/*.tmp
+
+# Logs de runs de entrenamiento (locales, no versionar)
+logs/
+
+# Config local de Claude Code (por máquina)
+.claude/
