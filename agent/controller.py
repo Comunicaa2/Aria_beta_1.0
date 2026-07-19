@@ -22,6 +22,8 @@ Comandos válidos (uno por turno):
     find_image RUTA     localiza un PNG en pantalla y reporta sus coords (no clica)
     focus_window "T"    trae al frente la ventana cuyo título contiene T
     wait N              espera N segundos
+    guardar NOMBRE      escribe el bloque CONTENIDO en workspace/NOMBRE (informes, scripts)
+    ejecutar_python F   ejecuta workspace/F.py y reporta su salida (análisis de datos real)
     done                señala tarea completada (no toca el SO)
 
 Las coordenadas que da el modelo están en el espacio de la IMAGEN reducida; este
@@ -35,9 +37,12 @@ import difflib
 import logging
 import os
 import re
+import subprocess
+import sys
 import time
 from typing import Optional
 
+from config import TIMEOUT_SCRIPT, WORKSPACE_DIR
 from utils.image import Captura
 
 logger = logging.getLogger("aria.controller")
@@ -173,6 +178,11 @@ _RE_FOCUS_WIN    = re.compile(r'^focus_window\s+["\']?(.+?)["\']?\s*$',  re.I)
 # scroll up/down [N] — N opcional (por defecto _SCROLL_DEF). Acepta arriba/abajo.
 _RE_SCROLL       = re.compile(r"^scroll\s+(up|down|arriba|abajo)(?:\s+(\d+))?\s*$", re.I)
 _RE_DONE         = re.compile(r"^done\s*$",                              re.I)
+# Nombre de archivo SIMPLE (empieza por alfanumérico; sin rutas, sin '..', sin
+# barras): es la frontera de confianza de guardar/ejecutar_python — todo vive
+# dentro de WORKSPACE_DIR.
+_RE_GUARDAR      = re.compile(r'^guardar\s+["\']?([\w][\w.\- ]*)["\']?\s*$', re.I)
+_RE_EJEC_PY      = re.compile(r'^ejecutar_python\s+["\']?([\w][\w.\- ]*\.py)["\']?\s*$', re.I)
 
 
 class _CapturaDetalle(logging.Handler):
@@ -214,10 +224,12 @@ class Controller:
     ultimo_detalle = ""   # detalle de la última acción (p. ej. coords de find_text/find_image)
 
     # ── API pública ────────────────────────────────────────────────────────────
-    def ejecutar(self, accion: str, captura: Optional[Captura] = None) -> bool:
+    def ejecutar(self, accion: str, captura: Optional[Captura] = None,
+                 contenido: str = "") -> bool:
         """
         Parsea y ejecuta una ACCION. Las coordenadas se reescalan al espacio real
-        usando `captura` (si se proporciona). Devuelve True si se ejecutó (o simuló)
+        usando `captura` (si se proporciona). `contenido` es el bloque CONTENIDO
+        multilínea de la acción 'guardar'. Devuelve True si se ejecutó (o simuló)
         correctamente, False si el comando es inválido o falló.
         """
         self._ultimo_done = False
@@ -318,6 +330,14 @@ class Controller:
             if m:
                 return self._wait(float(m.group(1)))
 
+            m = _RE_GUARDAR.match(cmd)
+            if m:
+                return self._guardar(m.group(1).strip(), contenido)
+
+            m = _RE_EJEC_PY.match(cmd)
+            if m:
+                return self._ejecutar_python(m.group(1).strip())
+
         except Exception as exc:                   # noqa: BLE001
             if "FailSafe" in type(exc).__name__:
                 logger.warning("Controller: FailSafe de pyautogui activado.")
@@ -345,6 +365,69 @@ class Controller:
             logger.warning("launch_app: no se pudo lanzar '%s' — %s", nombre, exc)
             return False
         logger.info("launch_app '%s'.", nombre)
+        return True
+
+    # ── Trabajo con archivos (workspace) ────────────────────────────────────────
+    def _guardar(self, nombre: str, contenido: str) -> bool:
+        """Escribe `contenido` en WORKSPACE_DIR/nombre. El regex ya restringe el
+        nombre a un archivo simple; el realpath-check es el cinturón extra de la
+        frontera de confianza (el nombre lo decide el modelo)."""
+        if not contenido.strip():
+            logger.warning("guardar '%s': falta el bloque CONTENIDO con el "
+                           "contenido del archivo.", nombre)
+            return False
+        os.makedirs(WORKSPACE_DIR, exist_ok=True)
+        ruta = os.path.realpath(os.path.join(WORKSPACE_DIR, nombre))
+        if os.path.dirname(ruta) != os.path.realpath(WORKSPACE_DIR):
+            logger.warning("guardar: nombre inválido '%s' (solo archivos simples, "
+                           "sin rutas).", nombre)
+            return False
+        try:
+            with open(ruta, "w", encoding="utf-8", newline="\n") as f:
+                f.write(contenido if contenido.endswith("\n") else contenido + "\n")
+        except OSError as exc:
+            logger.warning("guardar '%s': %s", nombre, exc)
+            return False
+        logger.info("guardar '%s' (%d caracteres).", nombre, len(contenido))
+        self.ultimo_detalle = (f"Archivo '{nombre}' guardado en la carpeta de "
+                               f"trabajo ({len(contenido)} caracteres)")
+        return True
+
+    def _ejecutar_python(self, nombre: str) -> bool:
+        """Ejecuta WORKSPACE_DIR/nombre con el mismo intérprete de Aria y deja la
+        salida (o el error) en `ultimo_detalle` para que el modelo la lea en el
+        siguiente turno. Timeout defensivo: TIMEOUT_SCRIPT."""
+        ruta = os.path.realpath(os.path.join(WORKSPACE_DIR, nombre))
+        if os.path.dirname(ruta) != os.path.realpath(WORKSPACE_DIR):
+            logger.warning("ejecutar_python: nombre inválido '%s'.", nombre)
+            return False
+        if not os.path.isfile(ruta):
+            logger.warning("ejecutar_python: '%s' no existe en la carpeta de "
+                           "trabajo — guárdalo primero con 'guardar'.", nombre)
+            return False
+        try:
+            r = subprocess.run(
+                [sys.executable, nombre], cwd=WORKSPACE_DIR,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=TIMEOUT_SCRIPT,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("ejecutar_python: '%s' superó los %ds y fue cancelado.",
+                           nombre, TIMEOUT_SCRIPT)
+            return False
+        except OSError as exc:
+            logger.warning("ejecutar_python '%s': %s", nombre, exc)
+            return False
+        # ponytail: solo los últimos 700 chars viajan al modelo; suficiente para
+        # métricas impresas — subir el tope si algún análisis lo necesita.
+        salida = (r.stdout or "").strip()[-700:]
+        if r.returncode != 0:
+            err = ((r.stderr or "").strip() or salida or "sin salida")[-700:]
+            logger.warning("ejecutar_python '%s' terminó con error (rc=%d): %s",
+                           nombre, r.returncode, err)
+            return False
+        logger.info("ejecutar_python '%s' OK.", nombre)
+        self.ultimo_detalle = f"Salida de {nombre}: {salida or '(sin salida)'}"
         return True
 
     def _click_ui(self, texto: str) -> bool:

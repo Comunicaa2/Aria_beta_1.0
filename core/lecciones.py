@@ -5,9 +5,9 @@ cada sesión para que Aria no repita los mismos fallos. Gemini no aprende entre
 sesiones (sus pesos son fijos); el 'aprendizaje' real vive en este archivo de
 texto, tasks/lecciones.json, que se inyecta en el contexto del modelo.
 
-Aria SOLO LEE este archivo. El Entrenador (proceso externo) es quien lo
-escribe/actualiza, respetando el desacople: la comunicación es por el archivo,
-no por código interno de Aria.
+Lo escriben dos actores: el Entrenador (proceso externo, si existe) y la propia
+Aria vía `registrar()` al terminar una tarea sin completarla — así el ciclo de
+aprendizaje funciona también sin el sistema de entrenamiento.
 """
 
 import json
@@ -29,6 +29,31 @@ def cargar() -> list[dict]:
         return [x for x in lecs if isinstance(x, dict) and x.get("regla")]
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return []
+
+
+def registrar(regla: str) -> None:
+    """Añade una lección (o suma 1 a 'veces' si ya existe). Escritura atómica.
+    Se capa a 40 lecciones (las más frecuentes) para no inflar el prompt."""
+    regla = " ".join((regla or "").split())[:200].strip()
+    if not regla:
+        return
+    lecs = cargar()
+    for x in lecs:
+        if x["regla"].strip().lower() == regla.lower():
+            x["veces"] = int(x.get("veces", 0)) + 1
+            break
+    else:
+        lecs.append({"regla": regla, "veces": 1})
+    lecs = sorted(lecs, key=lambda x: int(x.get("veces", 0)), reverse=True)[:40]
+    try:
+        os.makedirs(os.path.dirname(RUTA), exist_ok=True)
+        tmp = RUTA + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"lecciones": lecs}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, RUTA)
+        logger.info("Lección registrada: %s", regla)
+    except OSError as exc:
+        logger.warning("No se pudo guardar la lección: %s", exc)
 
 
 def seccion_prompt() -> str:

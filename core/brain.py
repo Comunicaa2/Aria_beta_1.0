@@ -84,6 +84,26 @@ _RE_BLOQUE_FORMATO = re.compile(
 _RE_SOLO_ACCION = re.compile(
     r"ACCI[OÓ]N\s*[\"']?\s*:\s*[\"']?(?P<acc>.+?)\s*(?:\bFIN\b|[\r\n}\]]|$)", re.I | re.S
 )
+# Bloque CONTENIDO (multilínea) de la acción 'guardar': todo lo que sigue a la
+# etiqueta hasta FIN o el final (GEN_STOP corta en FIN, así que suele ser el final).
+_RE_CONTENIDO = re.compile(r"CONTENIDO\s*:\s*\n?(?P<cont>.*?)(?:\n\s*FIN\s*$|\Z)",
+                           re.I | re.S)
+
+
+def _extraer_contenido(raw: str) -> str:
+    """Extrae el bloque CONTENIDO del texto CRUDO (sin limpiar: el contenido de un
+    archivo puede llevar backticks, llaves, etc.). Quita cercas de código ``` si
+    el modelo envolvió el contenido en ellas."""
+    m = _RE_CONTENIDO.search(raw or "")
+    if not m:
+        return ""
+    cont = m.group("cont").strip("\r\n")
+    lineas = cont.split("\n")
+    if lineas and lineas[0].strip().startswith("```"):
+        lineas = lineas[1:]
+    if lineas and lineas[-1].strip() == "```":
+        lineas = lineas[:-1]
+    return "\n".join(lineas)
 
 
 def _limpiar_think(texto: str) -> str:
@@ -118,15 +138,19 @@ def _aislar_formato(texto: str) -> str:
     """
     if not texto:
         return texto
+    # El CONTENIDO se extrae del texto ORIGINAL: la limpieza de '*' corrompería
+    # código (Python/markdown usan asteriscos legítimamente).
+    cont = _extraer_contenido(texto)
+    bloque_cont = f"\nCONTENIDO:\n{cont}" if cont else ""
     texto = texto.replace("*", "")               # quita markdown (negritas/viñetas)
     m = _RE_BLOQUE_FORMATO.search(texto)
     if m:
         pens = " ".join(m.group("pens").split())
         acc = _limpiar_accion(m.group("acc"))
-        return f"PENSAMIENTO: {pens}\nACCION: {acc}\nFIN"
+        return f"PENSAMIENTO: {pens}\nACCION: {acc}{bloque_cont}\nFIN"
     m2 = _RE_SOLO_ACCION.search(texto)
     if m2:
-        return f"ACCION: {_limpiar_accion(m2.group('acc'))}\nFIN"
+        return f"ACCION: {_limpiar_accion(m2.group('acc'))}{bloque_cont}\nFIN"
     return texto
 
 
@@ -141,6 +165,7 @@ class Decision:
     accion: str
     raw: str = ""
     modelo: str = MODELO_GEMINI   # qué modelo la produjo (GEMINI / NIM-LLAMA / NIM-MINIMAX)
+    contenido: str = ""           # bloque CONTENIDO (multilínea) para la acción 'guardar'
 
     @property
     def valida(self) -> bool:
@@ -158,6 +183,13 @@ acción verás una NUEVA captura y decidirás la siguiente acción.
 FORMATO DE RESPUESTA OBLIGATORIO (sin excepciones):
 PENSAMIENTO: <razonamiento breve, máximo 2 líneas>
 ACCION: <un solo comando válido>
+FIN
+
+Excepción ÚNICA: la acción 'guardar' añade un bloque CONTENIDO antes de FIN:
+PENSAMIENTO: <breve>
+ACCION: guardar nombre.ext
+CONTENIDO:
+<contenido COMPLETO del archivo — aquí sí puedes usar varias líneas>
 FIN
 
 COMANDOS VÁLIDOS (uno solo por respuesta):
@@ -182,6 +214,10 @@ scroll up N             desplaza hacia arriba N — ej: scroll up 5
 scroll down N           desplaza hacia abajo N — ej: scroll down 5
 hscroll DIR N           scroll horizontal (left/right) — ej: hscroll right 5
 wait N                  espera N segundos — ej: wait 2
+guardar NOMBRE          crea/sobrescribe un archivo en la carpeta de trabajo con el
+                        bloque CONTENIDO — ej: guardar analisis.py / guardar informe.md
+ejecutar_python NOMBRE  ejecuta un .py de la carpeta de trabajo y te devuelve su
+                        salida (print) en el siguiente turno — ej: ejecutar_python analisis.py
 done                    úsalo SOLO cuando la tarea esté completamente terminada
 
 REGLAS CRÍTICAS:
@@ -201,12 +237,18 @@ REGLAS CRÍTICAS:
 5. PENSAMIENTO máximo 2 líneas. Nada de explicaciones largas.
 6. Si la tarea ya está hecha, responde con ACCION: done.
 7. Termina SIEMPRE con FIN en su propia línea.
+8. PARA ANALIZAR DATOS O PROGRAMAR (métricas, estadística, gráficos, cálculos):
+   NO hagas cuentas de cabeza ni a ojo. Flujo: guardar script.py (con el código en
+   CONTENIDO) → ejecutar_python script.py → lee la salida real → guardar informe.md
+   con las conclusiones. En 'guardar' usa SOLO nombres de archivo simples (sin rutas
+   ni barras). Si el script falla verás el error: corrígelo y vuelve a guardarlo.
 """
 
 # System prompt para los modelos de fallback NIM (propensos a divagar, usar markdown
 # o copiar la plantilla de comandos). Anteponemos una orden tajante de formato.
 NIM_SYSTEM_INSTRUCTION = (
-    "RESPONDE SOLO con el bloque PENSAMIENTO/ACCION/FIN. Máximo 3 líneas en total. "
+    "RESPONDE SOLO con el bloque PENSAMIENTO/ACCION/FIN. Máximo 3 líneas en total "
+    "(única excepción: el bloque CONTENIDO de la acción 'guardar'). "
     "Nada más. TEXTO PLANO: prohibido markdown, asteriscos, negritas, viñetas o listas. "
     "En ACCION pon UN comando con números REALES leídos de la imagen "
     "(nunca escribas literalmente 'X Y').\n\n"
@@ -216,6 +258,11 @@ NIM_SYSTEM_INSTRUCTION = (
 _CONFIRM_SYS = ("Eres un verificador estricto. Mira la captura y responde SOLO con "
                 "'SI' o 'NO' seguido de 3-5 palabras de motivo. Nada de acciones.")
 
+# Prompt one-shot para destilar una lección tras una tarea fallida.
+_LECCION_SYS = ("Eres la memoria de Aria. Responde SOLO con UNA regla breve y "
+                "GENERAL (máximo 15 palabras) que evite repetir el error descrito. "
+                "Sin prefijos, sin formato, sin acciones.")
+
 # ─── Parsers de la respuesta ──────────────────────────────────────────────────
 _RE_PENSAMIENTO = re.compile(r"PENSAMIENTO\s*:\s*(.+?)(?:\n\s*ACCI[OÓ]N\s*:|\Z)",
                              re.I | re.S)
@@ -224,7 +271,7 @@ _RE_ACCION      = re.compile(r"ACCI[OÓ]N\s*:\s*(.+?)(?:\n|FIN|\Z)", re.I | re.S
 _RE_COMANDO_SUELTO = re.compile(
     r"^(?:launch_app|double_click|right_click|middle_click|hold_key|click_ui|"
     r"find_text|find_image|focus_window|hscroll|click|type|key|hotkey|scroll|"
-    r"drag|hover|wait|done)\b.*$", re.I | re.M
+    r"drag|hover|wait|guardar|ejecutar_python|done)\b.*$", re.I | re.M
 )
 
 # Verbos de comando para detectar acciones encadenadas ("type calc key enter").
@@ -281,7 +328,10 @@ def parsear(texto: str) -> Decision:
 
     accion = accion.strip().rstrip(".")
     accion = _un_solo_comando(accion)              # FIX-2: solo el primer comando
-    return Decision(pensamiento=pensamiento, accion=accion, raw=raw)
+    # El CONTENIDO se extrae del texto CRUDO (backticks y llaves son legítimos ahí).
+    contenido = _extraer_contenido(raw) if accion.lower().startswith("guardar") else ""
+    return Decision(pensamiento=pensamiento, accion=accion, raw=raw,
+                    contenido=contenido)
 
 
 class Cerebro:
@@ -364,6 +414,33 @@ class Cerebro:
         logger.info("Confirmación 'done': %s (%s)", "SI" if confirmado else "NO",
                     (raw or "")[:50].replace("\n", " "))
         return confirmado
+
+    def aprender_leccion(self, objetivo: str, motivo: str) -> str:
+        """Destila UNA regla breve de una tarea que terminó sin completarse y la
+        persiste en tasks/lecciones.json (se inyectará al prompt en la próxima
+        sesión). Devuelve la regla, o '' si no se pudo generar. Nunca lanza:
+        aprender es best-effort, no puede tumbar el cierre de la tarea."""
+        self._historial.append({"role": "user", "parts": [{"text":
+            f"La tarea «{objetivo}» terminó SIN completarse ({motivo}). Revisa qué "
+            "salió mal en esta conversación y escribe UNA regla breve y general "
+            "(máx. 15 palabras) para no repetir el error. Solo la regla."}]})
+        self._podar()
+        sys_g, nim_g = self._sys, self._nim_sys
+        self._sys = self._nim_sys = _LECCION_SYS
+        try:
+            raw = self._llamar(profundo=False)
+        except LimiteAPIError:
+            return ""                     # sin cuota no hay lección: no pasa nada
+        except Exception:                 # noqa: BLE001
+            logger.warning("aprender_leccion: fallo inesperado.", exc_info=True)
+            return ""
+        finally:
+            self._sys, self._nim_sys = sys_g, nim_g
+        regla = " ".join(_limpiar_think(raw or "").split()).strip(" .\"'")
+        if not regla or re.match(r"(?i)(PENSAMIENTO|ACCI[OÓ]N)\b", regla):
+            return ""
+        lecciones.registrar(regla)
+        return regla
 
     def reset(self) -> None:
         """Vacía el historial de la tarea en curso."""

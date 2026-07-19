@@ -3,6 +3,9 @@ aria_state.json
 vtube_token.txt
 .env
 
+# Carpeta de trabajo de Aria (archivos que ella genera: scripts, informes)
+workspace/
+
 # Python
 __pycache__/
 *.py[cod]

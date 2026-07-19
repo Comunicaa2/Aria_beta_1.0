@@ -179,6 +179,7 @@ class Aria:
                     )
                     if fallos_seguidos >= 3:
                         logger.error("Demasiadas respuestas inválidas — abortando tarea.")
+                        self._aprender_de_fallo(objetivo, "respuestas sin formato válido repetidas")
                         return ABORTADO
                     continue
 
@@ -189,7 +190,7 @@ class Aria:
                 self.fsm.a_working()
                 # Indicador visible del modelo que decidió esta acción.
                 logger.info("[%s] ▶ ACCION: %s", decision.modelo, decision.accion)
-                ok = self.controller.ejecutar(decision.accion, cap)
+                ok = self.controller.ejecutar(decision.accion, cap, decision.contenido)
                 self.stats["acciones"] += 1
 
                 if self.controller.es_done:
@@ -210,10 +211,13 @@ class Aria:
                 detalle = (f" {self.controller.ultimo_detalle}."
                            if self.controller.ultimo_detalle else "")
                 if ok:
-                    if decision.accion == ultima_accion:
+                    # Identidad = acción + contenido: regrabar un script CORREGIDO
+                    # con 'guardar' no cuenta como repetición.
+                    accion_id = f"{decision.accion}\x00{decision.contenido}"
+                    if accion_id == ultima_accion:
                         repes_accion += 1
                     else:
-                        ultima_accion, repes_accion = decision.accion, 1
+                        ultima_accion, repes_accion = accion_id, 1
                     # Atribuye la acción ejecutada al modelo que la produjo.
                     self.ultimas_acciones_modelo[decision.modelo] = (
                         self.ultimas_acciones_modelo.get(decision.modelo, 0) + 1
@@ -241,6 +245,7 @@ class Aria:
                         )
                         if fallos_seguidos >= 3:
                             logger.error("Atascada repitiendo la misma acción — abortando tarea.")
+                            self._aprender_de_fallo(objetivo, "repitió la misma acción sin efecto")
                             return ABORTADO
                     else:
                         fallos_seguidos = 0
@@ -256,9 +261,11 @@ class Aria:
                     )
                     if fallos_seguidos >= 3:
                         logger.error("Demasiados fallos de ejecución consecutivos — abortando tarea.")
+                        self._aprender_de_fallo(objetivo, "acciones fallidas consecutivas")
                         return ABORTADO
 
             logger.info("Se alcanzó el tope de %d ciclos.", MAX_PASOS_TAREA)
+            self._aprender_de_fallo(objetivo, "agotó los ciclos sin completarla")
             return AGOTADO
 
         except LimiteAPIError:
@@ -270,6 +277,18 @@ class Aria:
         finally:
             image.restaurar_consola()
             self.fsm.a_idle()
+
+    # ── Aprendizaje ─────────────────────────────────────────────────────────────
+    def _aprender_de_fallo(self, objetivo: str, motivo: str) -> None:
+        """Al terminar una tarea SIN completarla, destila una lección y la persiste
+        (core/lecciones.py) para inyectarla en el prompt de sesiones futuras.
+        Best-effort: jamás interfiere con el cierre de la tarea."""
+        try:
+            regla = self.cerebro.aprender_leccion(objetivo, motivo)
+            if regla:
+                logger.info("📚 Lección aprendida: %s", regla)
+        except Exception:                          # noqa: BLE001
+            logger.debug("No se pudo generar lección.", exc_info=True)
 
     # ── Persistencia ────────────────────────────────────────────────────────────
     def _guardar_pendiente(self, objetivo: str, ciclo: int) -> None:

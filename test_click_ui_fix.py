@@ -1,9 +1,10 @@
-"""Check mínimo del fix de click_ui (caso real del log t66b98892) y de
-_limpiar_accion. Sin frameworks: python test_click_ui_fix.py → OK o traceback."""
+"""Check mínimo del fix de click_ui (caso real del log t66b98892), de
+_limpiar_accion y de las acciones guardar/ejecutar_python (workspace).
+Sin frameworks: python test_click_ui_fix.py → OK o traceback."""
 
 from agent.controller import (_buscar_por_palabra, _es_control_accionable,
-                              _CONTROL_TYPES_ACCIONABLES)
-from core.brain import _limpiar_accion
+                              _CONTROL_TYPES_ACCIONABLES, Controller)
+from core.brain import _limpiar_accion, parsear
 
 
 class _Info:
@@ -52,6 +53,41 @@ def demo():
     assert _limpiar_accion('"done"') == "done"
 
     assert "Text" not in _CONTROL_TYPES_ACCIONABLES
+
+    # ── bloque CONTENIDO: parseo y cercas de código ──
+    d = parsear('PENSAMIENTO: calculo la media\n'
+                'ACCION: guardar analisis.py\n'
+                'CONTENIDO:\n'
+                '```python\n'
+                'datos = [1, 2, 3]\n'
+                'print(sum(datos) / len(datos))\n'
+                '```\n'
+                'FIN')
+    assert d.accion == "guardar analisis.py"
+    assert d.contenido == "datos = [1, 2, 3]\nprint(sum(datos) / len(datos))"
+    # sin 'guardar' no se arrastra contenido
+    assert parsear("PENSAMIENTO: x\nACCION: click 1 2\nFIN").contenido == ""
+
+    # ── guardar + ejecutar_python: ida y vuelta real en workspace ──
+    ctrl = Controller()
+    assert ctrl.ejecutar("guardar _test_aria.py",
+                         contenido="print(2 + 2)") is True
+    assert ctrl.ejecutar("ejecutar_python _test_aria.py") is True
+    assert "4" in ctrl.ultimo_detalle
+    # script con error → False y el error queda en ultimo_detalle
+    ctrl.ejecutar("guardar _test_aria.py", contenido="1/0")
+    assert ctrl.ejecutar("ejecutar_python _test_aria.py") is False
+    assert "ZeroDivisionError" in ctrl.ultimo_detalle
+    # frontera de confianza: rutas y traversal rechazados
+    assert ctrl.ejecutar("guardar ..\\fuera.py", contenido="x") is False
+    assert ctrl.ejecutar("guardar C:\\Windows\\x.py", contenido="x") is False
+    assert ctrl.ejecutar("ejecutar_python ..\\fuera.py") is False
+    # guardar sin CONTENIDO → fallo limpio
+    assert ctrl.ejecutar("guardar vacio.txt") is False
+
+    import os
+    from config import WORKSPACE_DIR
+    os.remove(os.path.join(WORKSPACE_DIR, "_test_aria.py"))
     print("OK")
 
 

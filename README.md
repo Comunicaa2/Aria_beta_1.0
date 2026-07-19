@@ -64,21 +64,50 @@ ACCION: <un solo comando>
 FIN
 ```
 
+Excepción única: la acción `guardar` añade un bloque `CONTENIDO:` multilínea
+(el contenido completo del archivo) entre `ACCION` y `FIN`.
+
 ### Comandos válidos
 
-| Comando            | Efecto                                          |
-|--------------------|-------------------------------------------------|
-| `click X Y`        | Clic izquierdo en (X, Y) **del espacio imagen** |
-| `double_click X Y` | Doble clic                                      |
-| `type TEXTO`       | Escribe el texto                                |
-| `key TECLA`        | Pulsa una tecla (`enter`, `esc`, `tab`, …)      |
-| `hotkey A+B`       | Combinación (`win+r`, `ctrl+c`, `alt+f4`)       |
-| `wait N`           | Espera N segundos                               |
-| `done`             | Señala tarea completada *(extensión necesaria)* |
+| Comando               | Efecto                                                       |
+|-----------------------|--------------------------------------------------------------|
+| `click X Y`           | Clic izquierdo en (X, Y) **del espacio imagen**              |
+| `double_click X Y`    | Doble clic                                                   |
+| `click_ui "NOMBRE"`   | Clica un control por su nombre (Windows UI Automation)       |
+| `find_text "T"`       | Localiza un texto por OCR y devuelve sus coordenadas         |
+| `launch_app NOMBRE`   | Abre una app por nombre (`notepad`, `calc`, `msedge`…)       |
+| `type TEXTO`          | Escribe el texto                                             |
+| `key TECLA`           | Pulsa una tecla (`enter`, `esc`, `tab`, …)                   |
+| `hotkey A+B`          | Combinación (`ctrl+s`, `ctrl+c`, …)                          |
+| `scroll up/down N`    | Desplaza la vista                                            |
+| `guardar NOMBRE`      | Escribe un archivo en `workspace/` (informes, scripts)       |
+| `ejecutar_python F.py`| Ejecuta un script de `workspace/` y lee su salida            |
+| `wait N`              | Espera N segundos                                            |
+| `done`                | Señala tarea completada (con verificación visual posterior)  |
 
 > Las coordenadas que da el modelo están en el espacio de la **imagen reducida**;
 > `controller.py` las reescala al espacio real de la pantalla con los metadatos de
 > la `Captura`.
+
+## Análisis de datos y aprendizaje
+
+Aria no se limita a clicar: puede **trabajar con datos de verdad**. Para analizar
+métricas, estadísticas o gráficos (por ejemplo, indicadores de un dashboard),
+sigue este flujo en vez de "calcular a ojo":
+
+```
+guardar analisis.py        (escribe el script con el bloque CONTENIDO)
+ejecutar_python analisis.py  (lo ejecuta; recibe la salida real en el siguiente turno)
+guardar informe.md         (persiste las conclusiones)
+```
+
+Los archivos viven en `workspace/` (solo nombres simples: el controller rechaza
+rutas y traversal). Si un script falla, Aria ve el error y lo corrige sola.
+
+Además, **aprende de sus fallos**: cuando una tarea termina sin completarse,
+destila una regla breve de lo ocurrido y la guarda en `tasks/lecciones.json`.
+Esas lecciones se inyectan en su prompt en las sesiones siguientes, así los
+errores no se repiten entre sesiones aunque el modelo no recuerde nada.
 
 ## Parada limpia ante límite de API (429)
 

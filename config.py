@@ -63,7 +63,9 @@ NVIDIA_FALLBACK_MODELS  = [NVIDIA_MODEL_PRIMARIO, NVIDIA_MODEL_SECUNDARIO]
 # variación suficiente sin perder reproducibilidad para clics/formato.
 GEN_TEMPERATURE   = 0.2
 GEN_TOP_P         = 0.9
-GEN_MAX_TOKENS    = 256            # tope de tokens VISIBLES de respuesta por turno
+GEN_MAX_TOKENS    = 2048           # tope de tokens VISIBLES: margen para el bloque
+                                   # CONTENIDO de 'guardar' (archivos/scripts); las
+                                   # respuestas normales siguen siendo cortas.
 GEN_STOP          = ["FIN"]        # corta la generación en el terminador del formato
 
 # ─── Presupuesto de razonamiento (mapeado a la FSM) ───────────────────────────
@@ -87,6 +89,12 @@ TIMEOUT_CONNECT = 10.0
 TIMEOUT_READ    = 60.0
 TIMEOUT_WRITE   = 20.0
 TIMEOUT_POOL    = 65.0
+
+# ─── Carpeta de trabajo (acciones guardar / ejecutar_python) ──────────────────
+# Aquí escribe Aria sus archivos (informes, scripts de análisis) y desde aquí se
+# ejecutan. Solo nombres de archivo simples: el controller rechaza rutas.
+WORKSPACE_DIR  = os.path.join(_BASE_DIR, "workspace")
+TIMEOUT_SCRIPT = 60        # s máximos de un ejecutar_python antes de cancelarlo
 
 # ─── Bucle de tarea autónoma ──────────────────────────────────────────────────
 MAX_PASOS_TAREA   = 12     # tope de ciclos visión→acción por comando (anti-bucle)
