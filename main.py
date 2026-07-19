@@ -123,6 +123,9 @@ class Aria:
             self.cerebro.reset()
         self.stats["tareas"] += 1
         fallos_seguidos = 0
+        # FIX #6: detectar atasco por acción idéntica "exitosa" repetida
+        # (p. ej. click en coords erróneas que no cambia nada en pantalla).
+        ultima_accion, repes_accion = "", 0
         # Reparto de acciones por modelo para ESTA tarea (lo lee el Entrenador).
         self.ultimas_acciones_modelo = {MODELO_GEMINI: 0,
                                         MODELO_NIM_LLAMA: 0, MODELO_NIM_OMNI: 0}
@@ -207,7 +210,10 @@ class Aria:
                 detalle = (f" {self.controller.ultimo_detalle}."
                            if self.controller.ultimo_detalle else "")
                 if ok:
-                    fallos_seguidos = 0
+                    if decision.accion == ultima_accion:
+                        repes_accion += 1
+                    else:
+                        ultima_accion, repes_accion = decision.accion, 1
                     # Atribuye la acción ejecutada al modelo que la produjo.
                     self.ultimas_acciones_modelo[decision.modelo] = (
                         self.ultimas_acciones_modelo.get(decision.modelo, 0) + 1
@@ -218,10 +224,30 @@ class Aria:
                         max_seg=DELAY_ESTABILIDAD + 1.5,
                         min_espera=1.5 if es_app else 0.5,
                     )
-                    self.cerebro.registrar_resultado(
-                        f"Sistema: acción '{decision.accion}' ejecutada.{detalle} "
-                        "Evalúa la nueva captura."
-                    )
+                    # FIX #6: la 3ª acción idéntica seguida cuenta como fallo aunque
+                    # se "ejecute con éxito" — alimenta el circuit-breaker existente.
+                    # ponytail: sin comparar capturas; 5 repeticiones legítimas
+                    # (p. ej. scroll) abortan — comparar cap.b64 si eso molesta.
+                    if repes_accion >= 3:
+                        fallos_seguidos += 1
+                        self.stats["fallos"] += 1
+                        logger.warning("Acción idéntica repetida %d veces sin avance "
+                                       "(fallo %d).", repes_accion, fallos_seguidos)
+                        self.cerebro.registrar_resultado(
+                            f"Sistema: llevas {repes_accion} veces seguidas la MISMA "
+                            f"acción '{decision.accion}' y la pantalla no avanza. NO la "
+                            "repitas: cambia de estrategia (click_ui \"<nombre del "
+                            "control>\" o find_text)."
+                        )
+                        if fallos_seguidos >= 3:
+                            logger.error("Atascada repitiendo la misma acción — abortando tarea.")
+                            return ABORTADO
+                    else:
+                        fallos_seguidos = 0
+                        self.cerebro.registrar_resultado(
+                            f"Sistema: acción '{decision.accion}' ejecutada.{detalle} "
+                            "Evalúa la nueva captura."
+                        )
                 else:
                     fallos_seguidos += 1
                     self.stats["fallos"] += 1
