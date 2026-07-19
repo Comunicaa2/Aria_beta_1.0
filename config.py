@@ -95,6 +95,10 @@ TIMEOUT_POOL    = 65.0
 # ejecutan. Solo nombres de archivo simples: el controller rechaza rutas.
 WORKSPACE_DIR  = os.path.join(_BASE_DIR, "workspace")
 TIMEOUT_SCRIPT = 60        # s máximos de un ejecutar_python antes de cancelarlo
+# Biblioteca BASE de skills (versionada en el repo, por categorías: sistema, red,
+# archivos, datos…). Las skills que Aria guarda en workspace/ tienen prioridad
+# sobre estas si comparten nombre (así puede mejorarlas sin tocar el repo).
+SKILLS_DIR     = os.path.join(_BASE_DIR, "skills")
 
 # ─── Bucle de tarea autónoma ──────────────────────────────────────────────────
 MAX_PASOS_TAREA   = 12     # tope de ciclos visión→acción por comando (anti-bucle)

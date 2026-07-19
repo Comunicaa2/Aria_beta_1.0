@@ -42,7 +42,7 @@ import sys
 import time
 from typing import Optional
 
-from config import TIMEOUT_SCRIPT, WORKSPACE_DIR
+from config import SKILLS_DIR, TIMEOUT_SCRIPT, WORKSPACE_DIR
 from utils.image import Captura
 
 logger = logging.getLogger("aria.controller")
@@ -337,8 +337,10 @@ class Controller:
 
             m = _RE_EJEC_PY.match(cmd)
             if m:
-                return self._ejecutar_python(m.group(1).strip(),
-                                             (m.group(2) or "").split())
+                # Argumentos: respeta comillas dobles (rutas con espacios).
+                args = [a.strip('"')
+                        for a in re.findall(r'"[^"]*"|\S+', m.group(2) or "")]
+                return self._ejecutar_python(m.group(1).strip(), args)
 
         except Exception as exc:                   # noqa: BLE001
             if "FailSafe" in type(exc).__name__:
@@ -396,21 +398,29 @@ class Controller:
         return True
 
     def _ejecutar_python(self, nombre: str, args: Optional[list] = None) -> bool:
-        """Ejecuta WORKSPACE_DIR/nombre con el mismo intérprete de Aria (más los
-        `args` opcionales — así las skills son parametrizables) y deja la salida
+        """Ejecuta un script (workspace/ primero, luego la biblioteca skills/) con
+        el mismo intérprete de Aria más los `args` opcionales, y deja la salida
         (o el error) en `ultimo_detalle` para que el modelo la lea en el
-        siguiente turno. Timeout defensivo: TIMEOUT_SCRIPT."""
-        ruta = os.path.realpath(os.path.join(WORKSPACE_DIR, nombre))
-        if os.path.dirname(ruta) != os.path.realpath(WORKSPACE_DIR):
-            logger.warning("ejecutar_python: nombre inválido '%s'.", nombre)
+        siguiente turno. cwd SIEMPRE es workspace/ (los archivos que el script
+        cree caen ahí). Timeout defensivo: TIMEOUT_SCRIPT."""
+        ruta = None
+        for base in (WORKSPACE_DIR, SKILLS_DIR):
+            cand = os.path.realpath(os.path.join(base, nombre))
+            if os.path.dirname(cand) != os.path.realpath(base):
+                logger.warning("ejecutar_python: nombre inválido '%s'.", nombre)
+                return False
+            if os.path.isfile(cand):
+                ruta = cand
+                break
+        if ruta is None:
+            logger.warning("ejecutar_python: '%s' no existe ni en la carpeta de "
+                           "trabajo ni en skills/ — guárdalo primero con "
+                           "'guardar'.", nombre)
             return False
-        if not os.path.isfile(ruta):
-            logger.warning("ejecutar_python: '%s' no existe en la carpeta de "
-                           "trabajo — guárdalo primero con 'guardar'.", nombre)
-            return False
+        os.makedirs(WORKSPACE_DIR, exist_ok=True)
         try:
             r = subprocess.run(
-                [sys.executable, nombre, *(args or [])], cwd=WORKSPACE_DIR,
+                [sys.executable, ruta, *(args or [])], cwd=WORKSPACE_DIR,
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=TIMEOUT_SCRIPT,
             )

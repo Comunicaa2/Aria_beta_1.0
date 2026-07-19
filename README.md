@@ -31,6 +31,9 @@ Aria_beta_1.0/
   agent/
     controller.py      ejecuta los comandos en el SO (pyautogui)
     telemetry.py       CPU / RAM / temperatura (psutil)
+  skills/
+    skill_*.py         biblioteca base de habilidades por categoría (ventanas,
+                       sistema, procesos, red, archivos, datos…)
   utils/
     image.py           captura de pantalla en RAM + estabilidad de pantalla
   avatar/
@@ -110,11 +113,14 @@ Además, **aprende y se auto-optimiza** en dos niveles:
   regla breve de lo ocurrido y la guarda en `tasks/lecciones.json`. Esas reglas
   se inyectan en su prompt en tareas futuras: los errores no se repiten aunque
   el modelo no recuerde nada entre sesiones.
-- **Skills**: cualquier script que guarde como `skill_*.py` (con un docstring de
-  una línea) pasa a un catálogo que ve al inicio de cada tarea. Si algo se
-  vuelve a pedir, reutiliza la skill (`ejecutar_python skill_x.py argumentos`)
-  en vez de reescribir el código; si una skill falla o queda lenta, la guarda
-  corregida con el mismo nombre. Su biblioteca de habilidades crece con el uso.
+- **Skills**: parte con una **biblioteca base** en `skills/` (habilidades por
+  categoría: ventanas, sistema, procesos, red, archivos, datos — al estilo de
+  los "scripts de habilidades" de un agente local) y cualquier script que ella
+  guarde como `skill_*.py` se suma al catálogo que ve al inicio de cada tarea.
+  Si algo se vuelve a pedir, reutiliza la skill (`ejecutar_python skill_x.py
+  argumentos`) en vez de reescribir el código; si una skill de fábrica falla o
+  queda lenta, guarda su versión corregida con el mismo nombre y esta la
+  reemplaza. Su biblioteca de habilidades crece con el uso.
 
 ## Parada limpia ante límite de API (429)
 

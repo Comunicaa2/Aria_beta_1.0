@@ -98,10 +98,19 @@ def demo():
     assert ctrl.ejecutar("ejecutar_python skill_test.py 2 3 5") is True
     assert "10" in ctrl.ultimo_detalle
 
+    # ── biblioteca base skills/: catálogo + ejecución real de skills de datos ──
+    assert "skill_ema.py" in catalogo or "skill_ema.py" in dict(skills.listar())
+    csv_prueba = "close\n" + "\n".join(str(100 + i) for i in range(60))
+    assert ctrl.ejecutar("guardar velas.csv", contenido=csv_prueba) is True
+    assert ctrl.ejecutar("ejecutar_python skill_csv_resumen.py velas.csv") is True
+    assert "Filas: 60" in ctrl.ultimo_detalle
+    assert ctrl.ejecutar("ejecutar_python skill_ema.py velas.csv close 5 20") is True
+    assert "EMA5" in ctrl.ultimo_detalle and "POR ENCIMA" in ctrl.ultimo_detalle
+
     import os
     from config import WORKSPACE_DIR
-    os.remove(os.path.join(WORKSPACE_DIR, "_test_aria.py"))
-    os.remove(os.path.join(WORKSPACE_DIR, "skill_test.py"))
+    for basura in ("_test_aria.py", "skill_test.py", "velas.csv"):
+        os.remove(os.path.join(WORKSPACE_DIR, basura))
     print("OK")
 
 
