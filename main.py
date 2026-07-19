@@ -15,7 +15,10 @@ Uso:
     python main.py --trainer   además, consume tareas del Entrenador (tasks/active.json)
 
 Consola:
-    <comando>   Aria intenta cumplir la tarea (hasta MAX_PASOS_TAREA ciclos)
+    <objetivo>  Aria lo persigue HASTA COMPLETARLO ("/goal permanente"): si un
+                intento se agota o aborta, aprende la lección y reintenta con otra
+                estrategia; si toca el límite de API (429), espera y reanuda.
+                Ctrl+C cancela el objetivo en curso (queda como pendiente).
     estado      muestra FSM, avatar y telemetría
     salir       detiene Aria limpiamente
 """
@@ -38,14 +41,19 @@ from config import (
     AGENT_VERSION,
     AHORRO_IMG_SIZE,
     AHORRO_JPEG_Q,
+    BACKOFF_BASE,
+    BACKOFF_MAX,
     DELAY_ESTABILIDAD,
+    EXTRA_CICLOS,
     LOG_LEVEL,
+    MAX_INTENTOS_OBJETIVO,
     MAX_PASOS_TAREA,
     PAUSA_OVERLOADED,
 )
 from core.brain import (Cerebro, LimiteAPIError,
                         MODELO_GEMINI, MODELO_NIM_LLAMA, MODELO_NIM_OMNI)
 from core.fsm import FSM, Estado
+from core import memoria
 from core import state as estado_persistente
 from agent.controller import Controller
 from agent.telemetry import Telemetria
@@ -74,6 +82,7 @@ COMPLETADO = "completado"
 AGOTADO    = "agotado"
 LIMITE     = "limite"
 ABORTADO   = "abortado"
+CANCELADO  = "cancelado"   # Ctrl+C del usuario durante un objetivo persistente
 
 
 class Aria:
@@ -99,6 +108,10 @@ class Aria:
         # Acciones de la ÚLTIMA tarea repartidas por modelo (para el Entrenador).
         self.ultimas_acciones_modelo = {MODELO_GEMINI: 0,
                                         MODELO_NIM_LLAMA: 0, MODELO_NIM_OMNI: 0}
+        # Cierre del último intento (motivo del fallo + lección destilada): lo
+        # consume la memoria RAG y la coletilla de reintento del objetivo.
+        self.ultimo_motivo = ""
+        self.ultima_leccion = ""
 
         logger.info(
             "%s v%s listo — Físico: %s | Visión: %s | Avatar: %s.",
@@ -120,7 +133,7 @@ class Aria:
         de API. Devuelve uno de: COMPLETADO / AGOTADO / LIMITE / ABORTADO.
         """
         if not reanudada:
-            self.cerebro.reset()
+            self.cerebro.reset(objetivo)   # refresca skills/lecciones + memoria RAG
         self.stats["tareas"] += 1
         fallos_seguidos = 0
         # FIX #6: detectar atasco por acción idéntica "exitosa" repetida
@@ -206,6 +219,7 @@ class Aria:
                                 objetivo,
                                 f"COMPLETADA pero lenta ({ciclo} de {MAX_PASOS_TAREA} "
                                 "ciclos); cómo lograrla en menos pasos")
+                        self._milla_extra(objetivo)
                         return COMPLETADO
                     logger.warning("'done' RECHAZADO: la tarea no se ve completa — continúo.")
                     self.cerebro.registrar_resultado(
@@ -285,15 +299,54 @@ class Aria:
             image.restaurar_consola()
             self.fsm.a_idle()
 
+    # ── Milla extra: superar lo pedido (tras un 'done' confirmado) ──────────────
+    def _milla_extra(self, objetivo: str) -> None:
+        """Fase opcional post-done: hasta EXTRA_CICLOS acciones pequeñas y seguras
+        que superen lo pedido (regla 10 del prompt). Jamás convierte el éxito en
+        fallo: cualquier error — incluido un 429 — se ignora y la tarea sigue
+        COMPLETADA. No toca fallos_seguidos ni el detector de repetición."""
+        if EXTRA_CICLOS <= 0:
+            return
+        try:
+            logger.info("Fase EXTRA: buscando mejora opcional (máx %d ciclos).",
+                        EXTRA_CICLOS)
+            self.cerebro.registrar_resultado(
+                "Sistema: objetivo cumplido y CONFIRMADO. Fase EXTRA opcional: si "
+                "existe UNA mejora pequeña, segura y relacionada que supere lo "
+                "pedido, ejecútala; si no, responde ACCION: done.")
+            for i in range(1, EXTRA_CICLOS + 1):
+                cap = image.capturar()
+                if cap is None or not cap.b64:
+                    return
+                decision = self.cerebro.pensar(
+                    f"Tarea: {objetivo}\nFase EXTRA {i}/{EXTRA_CICLOS} — mejora "
+                    f"opcional (la imagen mide {cap.ancho_img}x{cap.alto_img} px). "
+                    "¿Mejora pequeña y segura, o done?", cap.b64, profundo=False)
+                if not decision.valida or decision.accion.lower().startswith("done"):
+                    return
+                logger.info("✨ Milla extra (%d/%d): %s", i, EXTRA_CICLOS, decision.accion)
+                if not self.controller.ejecutar(decision.accion, cap, decision.contenido):
+                    return
+                self.stats["acciones"] += 1
+                image.esperar_estabilidad(max_seg=DELAY_ESTABILIDAD + 1.5, min_espera=0.5)
+                self.cerebro.registrar_resultado(
+                    "Sistema: mejora aplicada. ¿Otra mejora pequeña, o done?")
+        except LimiteAPIError:
+            logger.info("Milla extra interrumpida por 429 — la tarea sigue COMPLETADA.")
+        except Exception:                          # noqa: BLE001
+            logger.debug("Milla extra falló — se ignora.", exc_info=True)
+
     # ── Aprendizaje ─────────────────────────────────────────────────────────────
     def _aprender(self, objetivo: str, motivo: str) -> None:
         """Al terminar una tarea fallida (o completada pero lenta), destila una
         lección y la persiste (core/lecciones.py) para inyectarla en el prompt de
         tareas futuras. Best-effort: jamás interfiere con el cierre de la tarea."""
+        self.ultimo_motivo = motivo               # lo consumen RAG y reintentos
         try:
             regla = self.cerebro.aprender_leccion(objetivo, motivo)
             if regla:
                 logger.info("📚 Lección aprendida: %s", regla)
+                self.ultima_leccion = regla
         except Exception:                          # noqa: BLE001
             logger.debug("No se pudo generar lección.", exc_info=True)
 
@@ -322,9 +375,70 @@ class Aria:
 
     # ── Ejecución serializada (consola + entrenador no se pisan) ─────────────────
     def ejecutar_protegido(self, objetivo: str, **kw) -> str:
-        """Ejecuta una tarea tomando el lock físico (una sola tarea controla el SO)."""
+        """Ejecuta una tarea tomando el lock físico (una sola tarea controla el SO)
+        y registra el episodio en la memoria RAG al cerrar (best-effort). Es el
+        camino común de consola, objetivo persistente y entrenador: todos dejan
+        recuerdo."""
         with self._exec_lock:
-            return self.ejecutar_tarea(objetivo, **kw)
+            self.ultimo_motivo = self.ultima_leccion = ""
+            ciclos_antes = self.stats["ciclos"]
+            res = self.ejecutar_tarea(objetivo, **kw)
+            memoria.registrar_episodio(
+                objetivo, res, motivo=self.ultimo_motivo,
+                leccion=self.ultima_leccion,
+                ciclos=self.stats["ciclos"] - ciclos_antes)
+            return res
+
+    # ── Objetivo persistente ("/goal permanente") ────────────────────────────────
+    def perseguir_objetivo(self, objetivo: str, ciclo_inicial: int = 1,
+                           reanudada: bool = False) -> str:
+        """Bucle exterior del "/goal permanente": no se rinde hasta COMPLETADO.
+        AGOTADO/ABORTADO → nuevo intento con el motivo del fallo en el prompt (la
+        lección ya quedó destilada y entra fresca vía reset); LIMITE (429) →
+        espera con backoff exponencial y reanuda desde el estado guardado.
+        Ctrl+C cancela el objetivo (queda como pendiente). MAX_INTENTOS_OBJETIVO=0
+        significa sin límite; un valor > 0 acota los intentos (útil en pruebas)."""
+        intento, espera, coletilla = 0, BACKOFF_BASE, ""
+        try:
+            while True:
+                intento += 1
+                if intento > 1:
+                    logger.info("Objetivo «%s» — intento %d.", objetivo[:60], intento)
+                res = self.ejecutar_protegido(objetivo + coletilla,
+                                              ciclo_inicial=ciclo_inicial,
+                                              reanudada=reanudada)
+                ciclo_inicial, reanudada = 1, False
+                if res == COMPLETADO:
+                    estado_persistente.limpiar()
+                    return COMPLETADO
+                if res == LIMITE:
+                    # Cuota, no estrategia: el 429 no cuenta como intento fallido.
+                    intento -= 1
+                    logger.warning("Límite de API — reanudo el objetivo en %.0fs.", espera)
+                    time.sleep(espera)
+                    espera = min(espera * 2, BACKOFF_MAX)
+                    snap = self.cargar_pendiente()
+                    if snap is not None:
+                        ciclo_inicial, reanudada = snap.ciclo, True
+                    continue
+                # AGOTADO / ABORTADO → reintentar con el contexto del fallo.
+                if MAX_INTENTOS_OBJETIVO and intento >= MAX_INTENTOS_OBJETIVO:
+                    logger.error("Objetivo «%s»: %d intentos sin éxito — me rindo.",
+                                 objetivo[:60], intento)
+                    estado_persistente.limpiar()
+                    return res
+                motivo = self.ultimo_motivo or res
+                coletilla = (f" (intento {intento + 1}; el anterior terminó en "
+                             f"{res} por: {motivo}. Usa otra estrategia)")
+                logger.warning("Intento %d terminó en %s — reintento en %.0fs.",
+                               intento, res, espera)
+                time.sleep(espera)
+                espera = min(espera * 2, BACKOFF_MAX)
+        except KeyboardInterrupt:
+            logger.warning("Objetivo «%s» cancelado por el usuario (Ctrl+C).",
+                           objetivo[:60])
+            self._guardar_pendiente(objetivo, 1)
+            return CANCELADO
 
     # ── Modo Entrenador: consume tareas de tasks/active.json ─────────────────────
     def consumir_entrenador(self, stop_event: threading.Event) -> None:
@@ -423,10 +537,9 @@ def _resolver_pendiente(aria: Aria) -> None:
     except (EOFError, KeyboardInterrupt):
         resp = "n"
     if resp in ("s", "si", "sí", "y", "yes"):
-        res = aria.ejecutar_protegido(snap.objetivo, ciclo_inicial=snap.ciclo, reanudada=True)
+        res = aria.perseguir_objetivo(snap.objetivo, ciclo_inicial=snap.ciclo,
+                                      reanudada=True)
         _reportar(res)
-        if res != LIMITE:
-            estado_persistente.limpiar()
     else:
         estado_persistente.limpiar()
         print("  (Tarea pendiente descartada.)")
@@ -434,10 +547,11 @@ def _resolver_pendiente(aria: Aria) -> None:
 
 def _reportar(resultado: str) -> None:
     msg = {
-        COMPLETADO: "✓ Tarea completada.",
-        AGOTADO:    "⚠ Se agotaron los ciclos sin declarar fin.",
+        COMPLETADO: "✓ Objetivo completado.",
+        AGOTADO:    "⚠ Se agotaron los intentos sin completar el objetivo.",
         LIMITE:     "⏸ Límite de API (429): estado guardado. Reinicia para continuar.",
-        ABORTADO:   "✗ Tarea abortada (percepción o respuestas inválidas).",
+        ABORTADO:   "✗ Objetivo abortado tras agotar los intentos.",
+        CANCELADO:  "✋ Objetivo cancelado (Ctrl+C). Quedó guardado como pendiente.",
     }.get(resultado, resultado)
     print(f"\n  {msg}\n")
 
@@ -486,14 +600,10 @@ def main() -> None:
                 print(f"  → {aria.estado_resumen()}")
                 continue
 
-            resultado = aria.ejecutar_protegido(entrada)
+            # "/goal permanente": Aria persigue el objetivo hasta completarlo
+            # (reintentos + esperas de cuota dentro); Ctrl+C lo cancela.
+            resultado = aria.perseguir_objetivo(entrada)
             _reportar(resultado)
-
-            if resultado == LIMITE:
-                print("  Deteniendo por límite de API. Vuelve a ejecutar para reanudar.")
-                break
-            if resultado == COMPLETADO:
-                estado_persistente.limpiar()
     finally:
         stop_event.set()
         if hilo_consumidor is not None:

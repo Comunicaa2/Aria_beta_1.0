@@ -23,7 +23,7 @@ import httpx
 
 from compartido import (MODELO_GEMINI, MODELO_NIM_LLAMA, MODELO_NIM_OMNI,
                         rate_limit_compartido)
-from core import lecciones, skills
+from core import lecciones, memoria, skills
 from config import (
     AGENT_NAME,
     GEMINI_API_KEY,
@@ -248,6 +248,10 @@ REGLAS CRÍTICAS:
    pedirse, consérvalo como skill: guardar skill_nombre.py cuyo docstring (una
    línea) diga qué hace y qué argumentos recibe. Si una skill falla o queda lenta,
    guárdala corregida/mejorada con el MISMO nombre: así te optimizas a ti misma.
+10. SUPERA LO PEDIDO: cumple el objetivo de la mejor forma posible (más completo,
+   más ordenado, más útil), sin salirte de él ni tocar nada no relacionado. Si
+   tras cumplirlo el Sistema te ofrece una fase EXTRA, propone solo mejoras
+   pequeñas y seguras relacionadas con la tarea, o 'done' si no las hay.
 """
 
 # System prompt para los modelos de fallback NIM (propensos a divagar, usar markdown
@@ -261,8 +265,14 @@ NIM_SYSTEM_INSTRUCTION = (
 ) + SYSTEM_INSTRUCTION
 
 # Prompt one-shot para confirmar 'done' (FIX #3): rol de verificador, no de operadora.
-_CONFIRM_SYS = ("Eres un verificador estricto. Mira la captura y responde SOLO con "
-                "'SI' o 'NO' seguido de 3-5 palabras de motivo. Nada de acciones.")
+# Las acciones de archivo (guardar/ejecutar_python) NO se ven en pantalla: el
+# verificador debe juzgarlas por las notas del Sistema en el historial, no exigir
+# evidencia visual imposible (bug del E2E 2026-07-19: rechazaba tareas ya hechas).
+_CONFIRM_SYS = ("Eres un verificador estricto. Decide con la captura Y el historial: "
+                "las acciones de archivos (guardar, ejecutar_python) no se ven en "
+                "pantalla — júzgalas por las notas del Sistema en la conversación. "
+                "Responde SOLO con 'SI' o 'NO' seguido de 3-5 palabras de motivo. "
+                "Nada de acciones.")
 
 # Prompt one-shot para destilar una lección (tarea fallida o completada lenta).
 _LECCION_SYS = ("Eres la memoria de Aria. Responde SOLO con UNA regla breve y "
@@ -361,11 +371,18 @@ class Cerebro:
         self._recargar_memoria()
         logger.info("Cerebro iniciado — modelo: %s.", GEMINI_MODEL)
 
-    def _recargar_memoria(self) -> None:
+    def _recargar_memoria(self, objetivo: str = "") -> None:
         """Reconstruye el system prompt con lecciones y skills FRESCAS. Se llama
         al iniciar y en cada reset(): una skill creada en la tarea anterior queda
-        disponible en la siguiente sin reiniciar Aria."""
-        seccion = lecciones.seccion_prompt() + skills.seccion_prompt()
+        disponible en la siguiente sin reiniciar Aria. Con `objetivo`, las
+        lecciones entran por relevancia y se añade la EXPERIENCIA RELEVANTE de la
+        memoria episódica (RAG) — recuerdos de tareas parecidas, no todo a granel."""
+        experiencia = memoria.seccion_prompt(objetivo)
+        if experiencia:
+            logger.info("Memoria RAG: EXPERIENCIA RELEVANTE inyectada (%d episodios).",
+                        experiencia.count("- «"))
+        seccion = (lecciones.seccion_prompt(objetivo) + skills.seccion_prompt()
+                   + experiencia)
         self._sys = SYSTEM_INSTRUCTION + seccion
         self._nim_sys = NIM_SYSTEM_INSTRUCTION + seccion
         n_skills = len(skills.listar())
@@ -410,8 +427,9 @@ class Cerebro:
         SOLO ante un 'NO' claro; ante SI / respuesta ambigua acepta (lenient: el
         verificador del trainer es el juez final). Propaga LimiteAPIError."""
         self._historial.append(self._mensaje_usuario(
-            f"VERIFICACIÓN (no emitas acciones): ¿la tarea «{objetivo}» está COMPLETADA "
-            "y visible en esta captura? Responde SOLO 'SI' o 'NO' + motivo breve.",
+            f"VERIFICACIÓN (no emitas acciones): ¿la tarea «{objetivo}» está COMPLETADA? "
+            "Usa la captura y, para acciones de archivo (guardar/ejecutar_python), las "
+            "notas del Sistema del historial. Responde SOLO 'SI' o 'NO' + motivo breve.",
             imagen_b64))
         self._podar()
         sys_g, nim_g = self._sys, self._nim_sys
@@ -455,10 +473,11 @@ class Cerebro:
         lecciones.registrar(regla)
         return regla
 
-    def reset(self) -> None:
-        """Vacía el historial de la tarea en curso y refresca lecciones/skills."""
+    def reset(self, objetivo: str = "") -> None:
+        """Vacía el historial de la tarea en curso y refresca lecciones/skills.
+        Con `objetivo`, además recupera la experiencia relevante (memoria RAG)."""
         self._historial.clear()
-        self._recargar_memoria()
+        self._recargar_memoria(objetivo)
 
     def cerrar(self) -> None:
         try:

@@ -100,6 +100,17 @@ TIMEOUT_SCRIPT = 60        # s máximos de un ejecutar_python antes de cancelarl
 # sobre estas si comparten nombre (así puede mejorarlas sin tocar el repo).
 SKILLS_DIR     = os.path.join(_BASE_DIR, "skills")
 
+# ─── Objetivo persistente ("/goal permanente") ────────────────────────────────
+# Aria no se rinde: un intento AGOTADO/ABORTADO dispara otro intento (con la
+# lección aprendida y el motivo del fallo en el prompt); un 429 espera y reanuda.
+MAX_INTENTOS_OBJETIVO = int(os.getenv("ARIA_MAX_INTENTOS", "0"))  # 0 = sin límite
+BACKOFF_BASE = float(os.getenv("ARIA_BACKOFF_BASE", "60"))   # s, 1.ª espera
+BACKOFF_MAX  = float(os.getenv("ARIA_BACKOFF_MAX", "900"))   # s, tope (x2 exponencial)
+# Milla extra: ciclos opcionales tras confirmar 'done' para superar lo pedido.
+EXTRA_CICLOS = int(os.getenv("ARIA_EXTRA_CICLOS", "3"))      # 0 = desactivada
+# Memoria RAG: episodios recuperados por relevancia al arrancar cada tarea.
+RAG_TOPK     = int(os.getenv("ARIA_RAG_TOPK", "4"))          # 0 = desactivada
+
 # ─── Bucle de tarea autónoma ──────────────────────────────────────────────────
 MAX_PASOS_TAREA   = 12     # tope de ciclos visión→acción por comando (anti-bucle)
 MAX_HISTORIAL     = 12      # FIX #2: 8→12 (~4 ciclos). Las imágenes viejas ya se

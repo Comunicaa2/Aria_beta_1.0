@@ -13,6 +13,7 @@ aprendizaje funciona también sin el sistema de entrenamiento.
 import json
 import logging
 import os
+import re
 
 logger = logging.getLogger("aria.lecciones")
 
@@ -56,13 +57,26 @@ def registrar(regla: str) -> None:
         logger.warning("No se pudo guardar la lección: %s", exc)
 
 
-def seccion_prompt() -> str:
+_RE_PALABRA = re.compile(r"[a-záéíóúñü0-9]{3,}")
+
+
+def seccion_prompt(objetivo: str = "") -> str:
     """Sección de lecciones para el system prompt ('' si no hay). Reglas concisas
-    (no volcado de logs), ordenadas por frecuencia descendente."""
+    (no volcado de logs), ordenadas por frecuencia descendente. Con `objetivo`,
+    RAG ligero: prioriza las lecciones que comparten vocabulario con la tarea
+    (empate → frecuencia) y se queda con 10 para no inflar el prompt."""
     lecs = cargar()
     if not lecs:
         return ""
     ordenadas = sorted(lecs, key=lambda x: int(x.get("veces", 0)), reverse=True)
+    if objetivo and len(ordenadas) > 10:
+        obj = set(_RE_PALABRA.findall(objetivo.lower()))
+
+        def puntuacion(x: dict) -> tuple:
+            pal = set(_RE_PALABRA.findall(x["regla"].lower()))
+            return (len(obj & pal), int(x.get("veces", 0)))
+
+        ordenadas = sorted(ordenadas, key=puntuacion, reverse=True)[:10]
     lineas = "\n".join(f"- {x['regla']}" for x in ordenadas)
     return ("\n\nLECCIONES DE SESIONES ANTERIORES — no repitas estos errores:\n"
             + lineas + "\n")

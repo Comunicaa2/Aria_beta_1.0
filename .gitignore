@@ -24,3 +24,6 @@ logs/
 
 # Config local de Claude Code (por máquina)
 .claude/
+
+# Grafo de conocimiento generado por graphify (local)
+graphify-out/
