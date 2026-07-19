@@ -104,10 +104,17 @@ guardar informe.md         (persiste las conclusiones)
 Los archivos viven en `workspace/` (solo nombres simples: el controller rechaza
 rutas y traversal). Si un script falla, Aria ve el error y lo corrige sola.
 
-Además, **aprende de sus fallos**: cuando una tarea termina sin completarse,
-destila una regla breve de lo ocurrido y la guarda en `tasks/lecciones.json`.
-Esas lecciones se inyectan en su prompt en las sesiones siguientes, así los
-errores no se repiten entre sesiones aunque el modelo no recuerde nada.
+Además, **aprende y se auto-optimiza** en dos niveles:
+
+- **Lecciones**: cuando una tarea falla (o se completa pero lenta), destila una
+  regla breve de lo ocurrido y la guarda en `tasks/lecciones.json`. Esas reglas
+  se inyectan en su prompt en tareas futuras: los errores no se repiten aunque
+  el modelo no recuerde nada entre sesiones.
+- **Skills**: cualquier script que guarde como `skill_*.py` (con un docstring de
+  una línea) pasa a un catálogo que ve al inicio de cada tarea. Si algo se
+  vuelve a pedir, reutiliza la skill (`ejecutar_python skill_x.py argumentos`)
+  en vez de reescribir el código; si una skill falla o queda lenta, la guarda
+  corregida con el mismo nombre. Su biblioteca de habilidades crece con el uso.
 
 ## Parada limpia ante límite de API (429)
 

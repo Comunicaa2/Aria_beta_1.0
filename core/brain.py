@@ -23,7 +23,7 @@ import httpx
 
 from compartido import (MODELO_GEMINI, MODELO_NIM_LLAMA, MODELO_NIM_OMNI,
                         rate_limit_compartido)
-from core import lecciones
+from core import lecciones, skills
 from config import (
     AGENT_NAME,
     GEMINI_API_KEY,
@@ -216,8 +216,9 @@ hscroll DIR N           scroll horizontal (left/right) — ej: hscroll right 5
 wait N                  espera N segundos — ej: wait 2
 guardar NOMBRE          crea/sobrescribe un archivo en la carpeta de trabajo con el
                         bloque CONTENIDO — ej: guardar analisis.py / guardar informe.md
-ejecutar_python NOMBRE  ejecuta un .py de la carpeta de trabajo y te devuelve su
-                        salida (print) en el siguiente turno — ej: ejecutar_python analisis.py
+ejecutar_python NOMBRE [ARGS]  ejecuta un .py de la carpeta de trabajo (con argumentos
+                        opcionales) y te devuelve su salida (print) en el siguiente
+                        turno — ej: ejecutar_python analisis.py datos.csv
 done                    úsalo SOLO cuando la tarea esté completamente terminada
 
 REGLAS CRÍTICAS:
@@ -242,6 +243,11 @@ REGLAS CRÍTICAS:
    CONTENIDO) → ejecutar_python script.py → lee la salida real → guardar informe.md
    con las conclusiones. En 'guardar' usa SOLO nombres de archivo simples (sin rutas
    ni barras). Si el script falla verás el error: corrígelo y vuelve a guardarlo.
+9. SKILLS (automejora): si en SKILLS DISPONIBLES hay una que resuelva (parte de)
+   la tarea, úsala en vez de reescribir el código. Si resuelves algo que volverá a
+   pedirse, consérvalo como skill: guardar skill_nombre.py cuyo docstring (una
+   línea) diga qué hace y qué argumentos recibe. Si una skill falla o queda lenta,
+   guárdala corregida/mejorada con el MISMO nombre: así te optimizas a ti misma.
 """
 
 # System prompt para los modelos de fallback NIM (propensos a divagar, usar markdown
@@ -258,10 +264,10 @@ NIM_SYSTEM_INSTRUCTION = (
 _CONFIRM_SYS = ("Eres un verificador estricto. Mira la captura y responde SOLO con "
                 "'SI' o 'NO' seguido de 3-5 palabras de motivo. Nada de acciones.")
 
-# Prompt one-shot para destilar una lección tras una tarea fallida.
+# Prompt one-shot para destilar una lección (tarea fallida o completada lenta).
 _LECCION_SYS = ("Eres la memoria de Aria. Responde SOLO con UNA regla breve y "
-                "GENERAL (máximo 15 palabras) que evite repetir el error descrito. "
-                "Sin prefijos, sin formato, sin acciones.")
+                "GENERAL (máximo 15 palabras) que mejore el desempeño futuro según "
+                "lo descrito. Sin prefijos, sin formato, sin acciones.")
 
 # ─── Parsers de la respuesta ──────────────────────────────────────────────────
 _RE_PENSAMIENTO = re.compile(r"PENSAMIENTO\s*:\s*(.+?)(?:\n\s*ACCI[OÓ]N\s*:|\Z)",
@@ -351,14 +357,21 @@ class Cerebro:
         self.ultimo_modelo = MODELO_GEMINI
         # Modelo NIM concreto usado en el último fallback (para logs/diagnóstico).
         self.ultimo_nim = ""
-        # Memoria persistente: inyecta las lecciones de sesiones anteriores en el
-        # system prompt una sola vez al iniciar (Gemini no aprende entre sesiones).
-        seccion = lecciones.seccion_prompt()
+        # Memoria persistente: lecciones + catálogo de skills en el system prompt.
+        self._recargar_memoria()
+        logger.info("Cerebro iniciado — modelo: %s.", GEMINI_MODEL)
+
+    def _recargar_memoria(self) -> None:
+        """Reconstruye el system prompt con lecciones y skills FRESCAS. Se llama
+        al iniciar y en cada reset(): una skill creada en la tarea anterior queda
+        disponible en la siguiente sin reiniciar Aria."""
+        seccion = lecciones.seccion_prompt() + skills.seccion_prompt()
         self._sys = SYSTEM_INSTRUCTION + seccion
         self._nim_sys = NIM_SYSTEM_INSTRUCTION + seccion
-        if seccion:
-            logger.info("Lecciones cargadas en el prompt (%d).", len(lecciones.cargar()))
-        logger.info("Cerebro iniciado — modelo: %s.", GEMINI_MODEL)
+        n_skills = len(skills.listar())
+        if n_skills:
+            logger.info("Memoria en prompt: %d lecciones, %d skills.",
+                        len(lecciones.cargar()), n_skills)
 
     # ── API pública ──────────────────────────────────────────────────────────
     def pensar(
@@ -421,9 +434,9 @@ class Cerebro:
         sesión). Devuelve la regla, o '' si no se pudo generar. Nunca lanza:
         aprender es best-effort, no puede tumbar el cierre de la tarea."""
         self._historial.append({"role": "user", "parts": [{"text":
-            f"La tarea «{objetivo}» terminó SIN completarse ({motivo}). Revisa qué "
-            "salió mal en esta conversación y escribe UNA regla breve y general "
-            "(máx. 15 palabras) para no repetir el error. Solo la regla."}]})
+            f"La tarea «{objetivo}» terminó así: {motivo}. Revisa esta conversación "
+            "y escribe UNA regla breve y general (máx. 15 palabras) para hacerlo "
+            "mejor la próxima vez. Solo la regla."}]})
         self._podar()
         sys_g, nim_g = self._sys, self._nim_sys
         self._sys = self._nim_sys = _LECCION_SYS
@@ -443,8 +456,9 @@ class Cerebro:
         return regla
 
     def reset(self) -> None:
-        """Vacía el historial de la tarea en curso."""
+        """Vacía el historial de la tarea en curso y refresca lecciones/skills."""
         self._historial.clear()
+        self._recargar_memoria()
 
     def cerrar(self) -> None:
         try:

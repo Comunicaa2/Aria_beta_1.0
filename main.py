@@ -179,7 +179,7 @@ class Aria:
                     )
                     if fallos_seguidos >= 3:
                         logger.error("Demasiadas respuestas inválidas — abortando tarea.")
-                        self._aprender_de_fallo(objetivo, "respuestas sin formato válido repetidas")
+                        self._aprender(objetivo, "respuestas sin formato válido repetidas")
                         return ABORTADO
                     continue
 
@@ -199,6 +199,13 @@ class Aria:
                     b64 = cap2.b64 if (cap2 and cap2.b64) else cap.b64
                     if self.cerebro.confirmar_done(objetivo, b64):
                         logger.info("Tarea COMPLETA confirmada (ciclo %d).", ciclo)
+                        # Automejora: completada pero LENTA → destilar cómo hacerla
+                        # en menos pasos la próxima vez (skill, otro camino, etc.).
+                        if ciclo >= 8:
+                            self._aprender(
+                                objetivo,
+                                f"COMPLETADA pero lenta ({ciclo} de {MAX_PASOS_TAREA} "
+                                "ciclos); cómo lograrla en menos pasos")
                         return COMPLETADO
                     logger.warning("'done' RECHAZADO: la tarea no se ve completa — continúo.")
                     self.cerebro.registrar_resultado(
@@ -245,7 +252,7 @@ class Aria:
                         )
                         if fallos_seguidos >= 3:
                             logger.error("Atascada repitiendo la misma acción — abortando tarea.")
-                            self._aprender_de_fallo(objetivo, "repitió la misma acción sin efecto")
+                            self._aprender(objetivo, "repitió la misma acción sin efecto")
                             return ABORTADO
                     else:
                         fallos_seguidos = 0
@@ -261,11 +268,11 @@ class Aria:
                     )
                     if fallos_seguidos >= 3:
                         logger.error("Demasiados fallos de ejecución consecutivos — abortando tarea.")
-                        self._aprender_de_fallo(objetivo, "acciones fallidas consecutivas")
+                        self._aprender(objetivo, "acciones fallidas consecutivas")
                         return ABORTADO
 
             logger.info("Se alcanzó el tope de %d ciclos.", MAX_PASOS_TAREA)
-            self._aprender_de_fallo(objetivo, "agotó los ciclos sin completarla")
+            self._aprender(objetivo, "agotó los ciclos sin completarla")
             return AGOTADO
 
         except LimiteAPIError:
@@ -279,10 +286,10 @@ class Aria:
             self.fsm.a_idle()
 
     # ── Aprendizaje ─────────────────────────────────────────────────────────────
-    def _aprender_de_fallo(self, objetivo: str, motivo: str) -> None:
-        """Al terminar una tarea SIN completarla, destila una lección y la persiste
-        (core/lecciones.py) para inyectarla en el prompt de sesiones futuras.
-        Best-effort: jamás interfiere con el cierre de la tarea."""
+    def _aprender(self, objetivo: str, motivo: str) -> None:
+        """Al terminar una tarea fallida (o completada pero lenta), destila una
+        lección y la persiste (core/lecciones.py) para inyectarla en el prompt de
+        tareas futuras. Best-effort: jamás interfiere con el cierre de la tarea."""
         try:
             regla = self.cerebro.aprender_leccion(objetivo, motivo)
             if regla:

@@ -85,9 +85,23 @@ def demo():
     # guardar sin CONTENIDO → fallo limpio
     assert ctrl.ejecutar("guardar vacio.txt") is False
 
+    # ── skills: catálogo + ejecutar_python con argumentos ──
+    from core import skills
+    assert ctrl.ejecutar(
+        "guardar skill_test.py",
+        contenido='"""Suma los numeros que reciba como argumentos."""\n'
+                  'import sys\nprint(sum(int(x) for x in sys.argv[1:]))') is True
+    catalogo = dict(skills.listar())
+    assert "skill_test.py" in catalogo
+    assert "Suma los numeros" in catalogo["skill_test.py"]
+    assert "skill_test.py" in skills.seccion_prompt()
+    assert ctrl.ejecutar("ejecutar_python skill_test.py 2 3 5") is True
+    assert "10" in ctrl.ultimo_detalle
+
     import os
     from config import WORKSPACE_DIR
     os.remove(os.path.join(WORKSPACE_DIR, "_test_aria.py"))
+    os.remove(os.path.join(WORKSPACE_DIR, "skill_test.py"))
     print("OK")
 
 

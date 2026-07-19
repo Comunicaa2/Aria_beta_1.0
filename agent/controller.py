@@ -23,7 +23,7 @@ Comandos válidos (uno por turno):
     focus_window "T"    trae al frente la ventana cuyo título contiene T
     wait N              espera N segundos
     guardar NOMBRE      escribe el bloque CONTENIDO en workspace/NOMBRE (informes, scripts)
-    ejecutar_python F   ejecuta workspace/F.py y reporta su salida (análisis de datos real)
+    ejecutar_python F [ARGS]  ejecuta workspace/F.py (con args opcionales) y reporta su salida
     done                señala tarea completada (no toca el SO)
 
 Las coordenadas que da el modelo están en el espacio de la IMAGEN reducida; este
@@ -182,7 +182,8 @@ _RE_DONE         = re.compile(r"^done\s*$",                              re.I)
 # barras): es la frontera de confianza de guardar/ejecutar_python — todo vive
 # dentro de WORKSPACE_DIR.
 _RE_GUARDAR      = re.compile(r'^guardar\s+["\']?([\w][\w.\- ]*)["\']?\s*$', re.I)
-_RE_EJEC_PY      = re.compile(r'^ejecutar_python\s+["\']?([\w][\w.\- ]*\.py)["\']?\s*$', re.I)
+_RE_EJEC_PY      = re.compile(r'^ejecutar_python\s+["\']?([\w][\w.\-]*\.py)["\']?'
+                              r'(?:\s+(.*?))?\s*$', re.I)
 
 
 class _CapturaDetalle(logging.Handler):
@@ -336,7 +337,8 @@ class Controller:
 
             m = _RE_EJEC_PY.match(cmd)
             if m:
-                return self._ejecutar_python(m.group(1).strip())
+                return self._ejecutar_python(m.group(1).strip(),
+                                             (m.group(2) or "").split())
 
         except Exception as exc:                   # noqa: BLE001
             if "FailSafe" in type(exc).__name__:
@@ -393,9 +395,10 @@ class Controller:
                                f"trabajo ({len(contenido)} caracteres)")
         return True
 
-    def _ejecutar_python(self, nombre: str) -> bool:
-        """Ejecuta WORKSPACE_DIR/nombre con el mismo intérprete de Aria y deja la
-        salida (o el error) en `ultimo_detalle` para que el modelo la lea en el
+    def _ejecutar_python(self, nombre: str, args: Optional[list] = None) -> bool:
+        """Ejecuta WORKSPACE_DIR/nombre con el mismo intérprete de Aria (más los
+        `args` opcionales — así las skills son parametrizables) y deja la salida
+        (o el error) en `ultimo_detalle` para que el modelo la lea en el
         siguiente turno. Timeout defensivo: TIMEOUT_SCRIPT."""
         ruta = os.path.realpath(os.path.join(WORKSPACE_DIR, nombre))
         if os.path.dirname(ruta) != os.path.realpath(WORKSPACE_DIR):
@@ -407,7 +410,7 @@ class Controller:
             return False
         try:
             r = subprocess.run(
-                [sys.executable, nombre], cwd=WORKSPACE_DIR,
+                [sys.executable, nombre, *(args or [])], cwd=WORKSPACE_DIR,
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=TIMEOUT_SCRIPT,
             )
