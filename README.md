@@ -179,3 +179,18 @@ Requiere VTube Studio con la API activada (puerto 8001) y estos hotkeys tipo
 El avatar refleja el estado de la FSM y se mueve con ondas matemáticas en función
 de la telemetría (la cabeza cabecea más cuanto más sube la CPU). Si VTube Studio
 no está abierto, el avatar simplemente queda inactivo.
+
+## Licencia
+
+Aria se ofrece bajo [PolyForm Noncommercial 1.0.0](LICENSE):
+
+- **Personas** — uso y modificación **gratis** para cualquier fin no comercial
+  (hobby, estudio, investigación).
+- **Empresas y uso comercial** (incluido el uso interno empresarial) — requieren
+  una **licencia de pago**.
+
+### Licencia comercial
+
+¿Quieres usar Aria en tu empresa o en un producto/servicio? Escribe a
+**comunicaytt@gmail.com** con tu caso de uso (número de puestos, finalidad) y
+recibirás condiciones y precio.
